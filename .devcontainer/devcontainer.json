@@ -19,16 +19,10 @@
     }
   },
   "features": {
-    "ghcr.io/devcontainers/features/git:1": {
-      "version": "latest"
-    },
     "ghcr.io/devcontainers/features/github-cli:1": {
       "version": "latest"
     }
   },
-  "postCreateCommand": "git config --global init.defaultBranch main && git config --global core.autocrlf input",
-  "remoteUser": "vscode",
-  "mounts": [
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached"
-  ]
+  "postCreateCommand": "git config --global user.name \"${GIT_NAME}\" && git config --global user.email \"${GIT_EMAIL}\" && git config --global init.defaultBranch main && git config --global core.autocrlf input",
+  "remoteUser": "vscode"
 }
