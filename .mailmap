@@ -1,3 +1,5 @@
 # This file maps old author names/emails to anonymized versions
 # Format: Proper Name <proper@email.xx> <commit@email.xx>
+# Note: The old email must be present in this file for Git to perform the mapping.
+# This is the standard Git mechanism for anonymizing commit history without rewriting history.
 Anonymous Developer <anonymous@example.com> Thomas Solbjør <thomas.solbjor@fortedigital.com>

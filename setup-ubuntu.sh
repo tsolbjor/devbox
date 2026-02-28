@@ -102,12 +102,12 @@ ensure_command() {
 # Validate required parameters
 if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
   if [[ -z "$GIT_NAME" ]]; then
-    echo "ERROR: GIT_NAME is not set. Please set it as an environment variable or edit the script." >&2
+    echo "ERROR: GIT_NAME is not set. Please set it as an environment variable." >&2
     echo "Example: export GIT_NAME='Your Name'" >&2
     exit 1
   fi
   if [[ -z "$GIT_EMAIL" ]]; then
-    echo "ERROR: GIT_EMAIL is not set. Please set it as an environment variable or edit the script." >&2
+    echo "ERROR: GIT_EMAIL is not set. Please set it as an environment variable." >&2
     echo "Example: export GIT_EMAIL='your.email@example.com'" >&2
     exit 1
   fi
