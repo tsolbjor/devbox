@@ -15,7 +15,7 @@ DOTNET_VERSION="${DOTNET_VERSION:-8.0}"
 INSTALL_DOTNET="${INSTALL_DOTNET:-true}"
 INSTALL_NODEJS="${INSTALL_NODEJS:-true}"
 INSTALL_AZURE_CLI="${INSTALL_AZURE_CLI:-true}"
-INSTALL_AZURE_DEVOPS_CLI="${INSTALL_AZURE_DEVOPS_CLI:-true}"
+INSTALL_AZURE_DEVELOPER_CLI="${INSTALL_AZURE_DEVELOPER_CLI:-true}"
 INSTALL_AZCOPY="${INSTALL_AZCOPY:-true}"
 INSTALL_OH_MY_ZSH="${INSTALL_OH_MY_ZSH:-true}"
 INSTALL_OH_MY_POSH="${INSTALL_OH_MY_POSH:-true}"
@@ -159,7 +159,7 @@ if [[ "$INSTALL_AZURE_CLI" == "true" ]]; then
 fi
 
 # Install Azure Developer CLI
-if [[ "$INSTALL_AZURE_DEVOPS_CLI" == "true" ]]; then
+if [[ "$INSTALL_AZURE_DEVELOPER_CLI" == "true" ]]; then
   log "Installing Azure Developer CLI"
   if ensure_command azd; then
     echo "✓ Azure Developer CLI already installed"
