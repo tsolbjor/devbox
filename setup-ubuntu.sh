@@ -5,8 +5,8 @@ set -euo pipefail
 # PARAMETERS (edit these)
 # =========================
 
-GIT_NAME="${GIT_NAME:-Thomas Solbjør}"
-GIT_EMAIL="${GIT_EMAIL:-thomas.solbjor@fortedigital.com}"
+GIT_NAME="${GIT_NAME:-}"
+GIT_EMAIL="${GIT_EMAIL:-}"
 
 # Where you keep repos inside WSL
 CODE_DIR="${CODE_DIR:-$HOME/code}"
@@ -98,6 +98,20 @@ ensure_command() {
 # =========================
 # RUN
 # =========================
+
+# Validate required parameters
+if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
+  if [[ -z "$GIT_NAME" ]]; then
+    echo "ERROR: GIT_NAME is not set. Please set it as an environment variable or edit the script." >&2
+    echo "Example: export GIT_NAME='Your Name'" >&2
+    exit 1
+  fi
+  if [[ -z "$GIT_EMAIL" ]]; then
+    echo "ERROR: GIT_EMAIL is not set. Please set it as an environment variable or edit the script." >&2
+    echo "Example: export GIT_EMAIL='your.email@example.com'" >&2
+    exit 1
+  fi
+fi
 
 log "Updating apt metadata"
 sudo apt-get update -y
