@@ -1,10 +1,6 @@
 # Use Ubuntu 22.04 LTS as the base image
 FROM mcr.microsoft.com/devcontainers/base:ubuntu-22.04
 
-# Build arguments for git configuration
-ARG GIT_NAME="Developer"
-ARG GIT_EMAIL="developer@example.com"
-
 # Install essential development packages
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get -y install --no-install-recommends \
