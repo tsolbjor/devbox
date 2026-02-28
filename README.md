@@ -27,7 +27,7 @@ The devcontainer includes:
 - Ubuntu 22.04 LTS base
 - Git, build-essential, gcc, make
 - jq, ripgrep, fd-find
-- GitHub CLI
+- GitHub CLI (v2.62.0)
 - Preconfigured Git defaults
 
 #### Customizing the DevContainer
@@ -133,7 +133,7 @@ ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
 - Git, curl, unzip
 - Build tools (build-essential, gcc, make)
 - Development utilities (jq, ripgrep, fd-find, gnupg)
-- GitHub CLI
+- GitHub CLI (v2.62.0)
 
 ### Windows
 - Windows Terminal
