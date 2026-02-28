@@ -96,11 +96,14 @@ $Config = @{
 
 ### Ubuntu/WSL ([setup-ubuntu.sh](setup-ubuntu.sh))
 
-Edit environment variables at the top of the script:
+Set environment variables or edit the script:
 
 ```bash
-GIT_NAME="${GIT_NAME:-Your Name}"
-GIT_EMAIL="${GIT_EMAIL:-your.email@example.com}"
+# Required (set before running or edit script)
+export GIT_NAME="Your Name"
+export GIT_EMAIL="your.email@example.com"
+
+# Optional configuration (with defaults)
 CODE_DIR="${CODE_DIR:-$HOME/code}"
 GIT_DEFAULT_BRANCH="${GIT_DEFAULT_BRANCH:-main}"
 SSH_KEY_TYPE="${SSH_KEY_TYPE:-ed25519}"
@@ -108,6 +111,8 @@ INSTALL_GITHUB_CLI="${INSTALL_GITHUB_CLI:-true}"
 SET_GIT_DEFAULTS="${SET_GIT_DEFAULTS:-true}"
 ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
 ```
+
+**Note:** The script will exit with an error if `GIT_NAME` or `GIT_EMAIL` are not set when `SET_GIT_DEFAULTS=true`.
 
 ## System Requirements
 
