@@ -25,12 +25,6 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # Create fd symlink (fd-find is called fdfind on Ubuntu)
 RUN mkdir -p /usr/local/bin && ln -sf $(which fdfind) /usr/local/bin/fd
 
-# Configure Git defaults
-RUN git config --global user.name "${GIT_NAME}" \
-    && git config --global user.email "${GIT_EMAIL}" \
-    && git config --global init.defaultBranch main \
-    && git config --global core.autocrlf input
-
 # Create code directory
 RUN mkdir -p /home/vscode/code && chown -R vscode:vscode /home/vscode/code
 

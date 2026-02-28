@@ -165,4 +165,3 @@ ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
 - SSH keys are generated with ed25519 algorithm by default (highly secure)
 - Git is configured globally across the system
 - Code directory defaults to `~/code` and can be customized
-- SSH keys are mounted from your host machine into the devcontainer for seamless Git operations
