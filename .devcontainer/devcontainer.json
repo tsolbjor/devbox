@@ -1,0 +1,24 @@
+{
+  "name": "DevBox Development Environment",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "containerEnv": {
+    "GIT_NAME": "Developer",
+    "GIT_EMAIL": "developer@example.com"
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "2.62.0"
+    }
+  },
+  "postCreateCommand": "git config --global user.name \"${GIT_NAME}\" && git config --global user.email \"${GIT_EMAIL}\" && git config --global init.defaultBranch main && git config --global core.autocrlf input",
+  "remoteUser": "vscode"
+}
