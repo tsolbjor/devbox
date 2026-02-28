@@ -3,6 +3,7 @@ Automated development environment setup for Windows and Ubuntu/WSL. This project
 
 ## Features
 
+- **DevContainer Support**: Pre-configured development container for VS Code with all essential tools
 - **Windows Setup**: Automated installation of Windows Terminal, VS Code, WSL 2, Rancher Desktop, and VS Code extensions
 - **Ubuntu/WSL Setup**: Installation of development packages (git, buildtools, ripgrep, etc.), Git configuration, and SSH key generation
 - **Idempotent Scripts**: Safe to run multiple times; scripts check for existing installations before installing
@@ -10,6 +11,37 @@ Automated development environment setup for Windows and Ubuntu/WSL. This project
 - **Git & SSH Automation**: Automatic Git configuration and SSH key generation with configurable options
 
 ## Quick Start
+
+### Using DevContainer (Recommended)
+
+The easiest way to get started is using VS Code Dev Containers:
+
+1. Install [VS Code](https://code.visualstudio.com/) and the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+2. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or [Rancher Desktop](https://rancherdesktop.io/) (with containerization enabled)
+3. Clone this repository
+4. Open the repository in VS Code
+5. When prompted, click **"Reopen in Container"** (or press `F1` and select "Dev Containers: Reopen in Container")
+6. VS Code will build and start the development container with all tools pre-installed
+
+The devcontainer includes:
+- Ubuntu 22.04 LTS base
+- Git, build-essential, gcc, make
+- jq, ripgrep, fd-find
+- GitHub CLI
+- Preconfigured Git defaults
+
+#### Customizing the DevContainer
+
+Edit `.devcontainer/devcontainer.json` to customize the build arguments:
+
+```json
+"build": {
+  "args": {
+    "GIT_NAME": "Your Name",
+    "GIT_EMAIL": "your.email@example.com"
+  }
+}
+```
 
 ### Windows Setup
 
@@ -81,6 +113,11 @@ ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
 
 ## System Requirements
 
+### DevContainer
+- VS Code with Dev Containers extension
+- Docker Desktop, Rancher Desktop, or compatible container runtime
+- 4GB+ RAM available for the container
+
 ### Windows Setup
 - Windows 10/11 (Pro, Enterprise, or Home with WSL support)
 - Administrator privileges
@@ -92,6 +129,13 @@ ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
 - sudo access (for apt-get)
 
 ## Installed Packages
+
+### DevContainer
+- Ubuntu 22.04 LTS base image
+- Git, curl, unzip
+- Build tools (build-essential, gcc, make)
+- Development utilities (jq, ripgrep, fd-find, gnupg)
+- GitHub CLI
 
 ### Windows
 - Windows Terminal
@@ -107,14 +151,18 @@ ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
 
 ## Files
 
+- [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json) - DevContainer configuration
+- [.devcontainer/Dockerfile](.devcontainer/Dockerfile) - DevContainer image definition
 - [setup-windows.ps1](setup-windows.ps1) - Windows environment setup
 - [setup-ubuntu.sh](setup-ubuntu.sh) - Ubuntu/WSL environment setup
 - [README.md](README.md) - This file
 
 ## Notes
 
+- **DevContainer** provides a consistent, isolated development environment across all platforms
 - Scripts are idempotent—safe to run multiple times
 - The Windows script requires Administrator privileges
 - SSH keys are generated with ed25519 algorithm by default (highly secure)
 - Git is configured globally across the system
 - Code directory defaults to `~/code` and can be customized
+- SSH keys are mounted from your host machine into the devcontainer for seamless Git operations
