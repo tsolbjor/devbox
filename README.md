@@ -32,14 +32,12 @@ The devcontainer includes:
 
 #### Customizing the DevContainer
 
-Edit `.devcontainer/devcontainer.json` to customize the build arguments:
+Edit `.devcontainer/devcontainer.json` to customize the Git configuration:
 
 ```json
-"build": {
-  "args": {
-    "GIT_NAME": "Your Name",
-    "GIT_EMAIL": "your.email@example.com"
-  }
+"containerEnv": {
+  "GIT_NAME": "Your Name",
+  "GIT_EMAIL": "your.email@example.com"
 }
 ```
 
