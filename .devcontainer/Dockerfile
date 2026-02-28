@@ -19,7 +19,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get clean -y && rm -rf /var/lib/apt/lists/*
 
 # Create fd symlink (fd-find is called fdfind on Ubuntu)
-RUN mkdir -p /usr/local/bin && ln -sf $(which fdfind) /usr/local/bin/fd
+RUN mkdir -p /usr/local/bin && ln -sf /usr/bin/fdfind /usr/local/bin/fd
 
 # Create code directory
 RUN mkdir -p /home/vscode/code && chown -R vscode:vscode /home/vscode/code
