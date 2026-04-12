@@ -1,195 +1,79 @@
 # devbox
-Automated development environment setup for Windows and Ubuntu/WSL. This project provides idempotent setup scripts to configure a complete development machine with essential tools, Git configuration, SSH keys, and system settings.
 
-## Features
+Automated, idempotent setup scripts for a Windows + WSL2 development environment.
 
-- **DevContainer Support**: Pre-configured development container for VS Code with all essential tools
-- **Windows Setup**: Automated installation of Windows Terminal, VS Code, WSL 2, Rancher Desktop, and VS Code extensions
-- **Ubuntu/WSL Setup**: Installation of development packages (git, buildtools, ripgrep, etc.), Git configuration, and SSH key generation
-- **Idempotent Scripts**: Safe to run multiple times; scripts check for existing installations before installing
-- **Customizable Parameters**: Edit configuration at the top of each script to customize behavior
-- **Git & SSH Automation**: Automatic Git configuration and SSH key generation with configurable options
+## Prerequisites
+
+**Windows** (`setup-windows.ps1`)
+- Windows 10/11 with WSL support
+- [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/) (App Installer from the Microsoft Store)
+- PowerShell run as Administrator
+
+**Ubuntu / WSL** (`setup-ubuntu.sh`)
+- Ubuntu 20.04 LTS or later inside WSL2
+- sudo access
 
 ## Quick Start
 
-### Using DevContainer (Recommended)
+### 1. Windows
 
-The easiest way to get started is using VS Code Dev Containers:
-
-1. Install [VS Code](https://code.visualstudio.com/) and the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
-2. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or [Rancher Desktop](https://rancherdesktop.io/) (with containerization enabled)
-3. Clone this repository
-4. Open the repository in VS Code
-5. When prompted, click **"Reopen in Container"** (or press `F1` and select "Dev Containers: Reopen in Container")
-6. VS Code will build and start the development container with all tools pre-installed
-
-The devcontainer includes:
-- Ubuntu 22.04 LTS base
-- Git, build-essential, gcc, make
-- jq, ripgrep, fd-find
-- GitHub CLI (v2.62.0)
-- Preconfigured Git defaults
-
-#### Customizing the DevContainer
-
-Edit `.devcontainer/devcontainer.json` to customize the Git configuration:
-
-```json
-"containerEnv": {
-  "GIT_NAME": "Your Name",
-  "GIT_EMAIL": "your.email@example.com"
-}
-```
-
-### Windows Setup
-
-1. Open PowerShell as Administrator
-2. Run the setup script:
-   ```powershell
-   .\setup-windows.ps1
-   ```
-3. The script will:
-   - Enable WSL 2 and Virtual Machine Platform features
-   - Install Windows Terminal, VS Code, and Rancher Desktop
-   - Set up Ubuntu distribution in WSL
-   - Configure VS Code extensions for remote development
-   - Set WSL resource limits
-
-### Ubuntu/WSL Setup
-
-1. Open a bash terminal in Ubuntu/WSL
-2. Run the setup script:
-   ```bash
-   bash setup-ubuntu.sh
-   ```
-3. The script will:
-   - Install essential development packages
-   - Configure Git user information
-   - Generate SSH keys (ed25519)
-   - Create development directories
-   - Set up Git defaults
-
-## Configuration
-
-### Windows ([setup-windows.ps1](setup-windows.ps1))
-
-Edit the `$Config` hashtable at the top of the script:
+Open PowerShell as Administrator:
 
 ```powershell
-$Config = @{
-  InstallWindowsTerminal = $true
-  InstallVSCode          = $true
-  InstallRancherDesktop  = $true
-  InstallGit             = $true
-  InstallPowerToys       = $true
-
-  Fonts     = @("Microsoft.CascadiaCode", "NERD-Fonts.JetBrainsMono")
-  CloudCLIs = @("Microsoft.AzureCLI", "Amazon.AWSCLI", "Google.CloudSDK")
-
-  EnsureWSL         = $true
-  UbuntuDistroName  = "Ubuntu"
-
-  # $null = auto-detect (75% of system RAM/CPUs; swap disabled when RAM >= 16 GB)
-  WslConfig = @{
-    memory         = $null
-    processors     = $null
-    swap           = $null
-    networkingMode = "mirrored"  # requires Windows 11 22H2+ / WSL 2.0
-    localhostForwarding = $true
-  }
-
-  # Rancher Desktop VM + Kubernetes (memoryInGB/numberCPUs $null = match WSL allocation)
-  RancherDesktopConfig = @{
-    Configure         = $true
-    memoryInGB        = $null
-    numberCPUs        = $null
-    containerEngine   = "moby"
-    kubernetesEnabled = $true
-  }
-
-  EnableLongPaths        = $true
-  EnableOpenSSHAgent     = $true
-  ExcludeWslFromDefender = $true
-
-  VSCodeExtensions = @(
-    "ms-vscode-remote.remote-wsl",
-    "ms-vscode-remote.remote-containers",
-    "ms-azuretools.vscode-docker"
-  )
-}
+.\setup-windows.ps1
 ```
 
-### Ubuntu/WSL ([setup-ubuntu.sh](setup-ubuntu.sh))
+Installs and configures:
 
-Set environment variables or edit the script:
+| Category | What gets set up |
+|---|---|
+| Apps | Windows Terminal, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip |
+| Fonts | Cascadia Code, JetBrains Mono Nerd Font |
+| Cloud CLIs | Azure CLI, AWS CLI, Google Cloud SDK |
+| VS Code | Remote WSL, Dev Containers, Docker extensions |
+| WSL | Ubuntu distro, resource limits (75% RAM/CPU), mirrored networking, swap disabled |
+| Rancher Desktop | moby engine (Docker-compatible), Kubernetes enabled |
+| Windows Terminal | JetBrains Mono font, One Half Dark theme, bar cursor, bell off |
+| PowerShell prompt | Oh My Posh (jandedobbeleer theme) for PS5 and PS7 |
+| System | Long path support, OpenSSH Agent, Defender exclusion for WSL vhdx |
+| Git | autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote |
+
+### 2. Ubuntu / WSL
+
+Inside your WSL Ubuntu terminal:
 
 ```bash
-# Required (set before running or edit script)
 export GIT_NAME="Your Name"
-export GIT_EMAIL="your.email@example.com"
-
-# Optional configuration (with defaults)
-CODE_DIR="${CODE_DIR:-$HOME/code}"
-GIT_DEFAULT_BRANCH="${GIT_DEFAULT_BRANCH:-main}"
-SSH_KEY_TYPE="${SSH_KEY_TYPE:-ed25519}"
-INSTALL_GITHUB_CLI="${INSTALL_GITHUB_CLI:-true}"
-SET_GIT_DEFAULTS="${SET_GIT_DEFAULTS:-true}"
-ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
+export GIT_EMAIL="your@email.com"
+bash setup-ubuntu.sh
 ```
 
-**Note:** The script will exit with an error if `GIT_NAME` or `GIT_EMAIL` are not set when `SET_GIT_DEFAULTS=true`.
+Installs and configures:
 
-## System Requirements
+| Category | What gets set up |
+|---|---|
+| Shell | zsh (set as default), Oh My Posh, fzf with key bindings |
+| Dev tools | git, build-essential, ripgrep, fd, jq, wget, zip, GitHub CLI |
+| Kubernetes | kubectl, helm, k9s, kubectx, kubens |
+| Git | user config, defaultBranch, pull.rebase, push.autoSetupRemote |
+| SSH | ed25519 key pair |
+| System | /etc/wsl.conf (automount metadata, systemd) |
 
-### DevContainer
-- VS Code with Dev Containers extension
-- Docker Desktop, Rancher Desktop, or compatible container runtime
-- 4GB+ RAM available for the container
+After the script finishes it prints your SSH public key and next steps.
 
-### Windows Setup
-- Windows 10/11 (Pro, Enterprise, or Home with WSL support)
-- Administrator privileges
-- winget package manager installed
+## Customisation
 
-### Ubuntu/WSL Setup
-- Ubuntu 20.04 LTS or later
-- bash shell
-- sudo access (for apt-get)
+Both scripts have a `PARAMETERS` section at the very top — edit values there before running. No changes to the implementation section are needed for common adjustments.
 
-## Installed Packages
+**Windows** — remove entries from `Fonts`, `CloudCLIs`, or `VSCodeExtensions`; change the Oh My Posh theme; override `WslConfig` memory/CPU values explicitly instead of auto-detecting.
 
-### DevContainer
-- Ubuntu 22.04 LTS base image
-- Git, curl, unzip
-- Build tools (build-essential, gcc, make)
-- Development utilities (jq, ripgrep, fd-find, gnupg)
-- GitHub CLI (v2.62.0)
+**Ubuntu** — set `INSTALL_KUBECTL=false` to skip Kubernetes tools; change `OH_MY_POSH_THEME` to any name from [ohmyposh.dev/docs/themes](https://ohmyposh.dev/docs/themes); set `WSL_ENABLE_SYSTEMD=false` on older Windows builds.
 
-### Windows
-- Windows Terminal
-- Visual Studio Code
-- Rancher Desktop (Docker alternative)
-- VS Code extensions for remote development (WSL, Dev Containers)
+## System requirements
 
-### Ubuntu/WSL
-- Git, curl, unzip
-- Build tools (build-essential, gcc, make)
-- Development utilities (jq, ripgrep, fd-find, gnupg)
-- GitHub CLI (optional)
-
-## Files
-
-- [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json) - DevContainer configuration
-- [.devcontainer/Dockerfile](.devcontainer/Dockerfile) - DevContainer image definition
-- [setup-windows.ps1](setup-windows.ps1) - Windows environment setup
-- [setup-ubuntu.sh](setup-ubuntu.sh) - Ubuntu/WSL environment setup
-- [README.md](README.md) - This file
-
-## Notes
-
-- **DevContainer** provides a consistent, isolated development environment across all platforms
-- Scripts are idempotent—safe to run multiple times
-- The Windows script requires Administrator privileges
-- SSH keys are generated with ed25519 algorithm by default (highly secure)
-- Git is configured globally across the system
-- Code directory defaults to `~/code` and can be customized
+| | Minimum |
+|---|---|
+| Windows | Windows 10/11 (Home, Pro, or Enterprise) |
+| RAM | 16 GB recommended (scripts allocate 75% to WSL) |
+| WSL networking | `networkingMode=mirrored` requires Windows 11 22H2+ |
+| Systemd in WSL | Requires Windows 11 22H2+ / WSL 2.0 |
