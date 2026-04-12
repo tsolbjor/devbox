@@ -11,6 +11,12 @@ $Config = @{
   InstallPowerToys       = $true
   Install7Zip            = $true
 
+  # Oh My Posh — prompt theme engine; configures PowerShell profiles for PS5 and PS7
+  OhMyPosh = @{
+    Configure = $true
+    Theme     = "jandedobbeleer"   # name from https://ohmyposh.dev/docs/themes
+  }
+
   # Fonts (winget IDs)
   Fonts = @(
     "Microsoft.CascadiaCode",
@@ -261,6 +267,42 @@ function Ensure-WindowsTerminalDefaultProfileUbuntu {
   Write-Host "✓ Updated Windows Terminal default profile." -ForegroundColor Green
 }
 
+function Ensure-OhMyPoshPowerShell {
+  param([Parameter(Mandatory=$true)][string]$Theme)
+
+  Install-WingetPackage -Id "JanDeDobbeleer.OhMyPosh"
+
+  $docs = [Environment]::GetFolderPath("MyDocuments")
+  $targets = @(
+    @{ Profile = Join-Path $docs "WindowsPowerShell\Microsoft.PowerShell_profile.ps1"; Shell = "powershell" }
+    @{ Profile = Join-Path $docs "PowerShell\Microsoft.PowerShell_profile.ps1";        Shell = "pwsh" }
+  )
+
+  foreach ($t in $targets) {
+    $exe = if ($t.Shell -eq "pwsh") { "pwsh" } else { "powershell" }
+    if (-not (Test-Command $exe)) { continue }
+
+    $dir = Split-Path $t.Profile
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+
+    $content = if (Test-Path $t.Profile) { Get-Content $t.Profile -Raw } else { "" }
+    if ($content -match "oh-my-posh") {
+      Write-Host "✓ oh-my-posh already in: $($t.Profile)" -ForegroundColor Green
+      continue
+    }
+
+    # Write literal $env:POSH_THEMES_PATH so it expands at shell startup, not now
+    $initLine = "oh-my-posh init $($t.Shell) --config `"`$env:POSH_THEMES_PATH\$Theme.omp.json`" | Invoke-Expression"
+    Write-Host "→ Adding oh-my-posh to: $($t.Profile)" -ForegroundColor Cyan
+    if ($content) {
+      Add-Content -Path $t.Profile -Value "`n$initLine" -Encoding UTF8
+    } else {
+      Set-Content -Path $t.Profile -Value $initLine -Encoding UTF8
+    }
+    Write-Host "✓ oh-my-posh configured in: $($t.Profile)" -ForegroundColor Green
+  }
+}
+
 function Ensure-WindowsTerminalProfileDefaults {
   param($WtConfig)
 
@@ -486,6 +528,10 @@ if ($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTermi
 
 if ($Config.WindowsTerminalConfig.Configure) {
   Ensure-WindowsTerminalProfileDefaults -WtConfig $Config.WindowsTerminalConfig
+}
+
+if ($Config.OhMyPosh.Configure) {
+  Ensure-OhMyPoshPowerShell -Theme $Config.OhMyPosh.Theme
 }
 
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {

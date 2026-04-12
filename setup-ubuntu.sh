@@ -26,7 +26,9 @@ APT_PACKAGES=(
 )
 
 # Optional installs
-INSTALL_GITHUB_CLI="${INSTALL_GITHUB_CLI:-true}"   # installs `gh` from Ubuntu repo if available
+INSTALL_GITHUB_CLI="${INSTALL_GITHUB_CLI:-true}"
+INSTALL_OH_MY_POSH="${INSTALL_OH_MY_POSH:-true}"
+OH_MY_POSH_THEME="${OH_MY_POSH_THEME:-jandedobbeleer}"   # name from https://ohmyposh.dev/docs/themes
 SET_GIT_DEFAULTS="${SET_GIT_DEFAULTS:-true}"
 ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
 
@@ -93,6 +95,50 @@ ensure_ssh_key() {
 
 ensure_command() {
   command -v "$1" >/dev/null 2>&1
+}
+
+ensure_oh_my_posh() {
+  # Install binary
+  if ensure_command oh-my-posh; then
+    echo "✓ oh-my-posh already installed"
+  else
+    echo "→ Installing oh-my-posh"
+    curl -fsSL https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin"
+    # Ensure ~/.local/bin is on PATH in all present shell rc files (idempotent)
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+      if [[ -f "$rc" ]] && ! grep -q '\.local/bin' "$rc"; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
+        echo "→ Added ~/.local/bin to PATH in $(basename "$rc")"
+      fi
+    done
+  fi
+
+  # Download theme
+  local config_dir="$HOME/.config/oh-my-posh"
+  local theme_file="$config_dir/theme.omp.json"
+  if [[ -f "$theme_file" ]]; then
+    echo "✓ oh-my-posh theme already present: $theme_file"
+  else
+    echo "→ Downloading oh-my-posh theme: $OH_MY_POSH_THEME"
+    mkdir -p "$config_dir"
+    curl -fsSL "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/${OH_MY_POSH_THEME}.omp.json" \
+      -o "$theme_file"
+    echo "✓ Theme saved to $theme_file"
+  fi
+
+  # Wire init into shell rc files (idempotent)
+  if [[ -f "$HOME/.bashrc" ]] && ! grep -q 'oh-my-posh' "$HOME/.bashrc"; then
+    echo "→ Adding oh-my-posh init to .bashrc"
+    printf '\neval "$(oh-my-posh init bash --config ~/.config/oh-my-posh/theme.omp.json)"\n' >> "$HOME/.bashrc"
+  elif [[ -f "$HOME/.bashrc" ]]; then
+    echo "✓ oh-my-posh already in .bashrc"
+  fi
+  if [[ -f "$HOME/.zshrc" ]] && ! grep -q 'oh-my-posh' "$HOME/.zshrc"; then
+    echo "→ Adding oh-my-posh init to .zshrc"
+    printf '\neval "$(oh-my-posh init zsh --config ~/.config/oh-my-posh/theme.omp.json)"\n' >> "$HOME/.zshrc"
+  elif [[ -f "$HOME/.zshrc" ]]; then
+    echo "✓ oh-my-posh already in .zshrc"
+  fi
 }
 
 # =========================
@@ -168,6 +214,11 @@ if [[ "$INSTALL_GITHUB_CLI" == "true" ]]; then
     fi
     sudo apt-get install -y gh
   fi
+fi
+
+if [[ "$INSTALL_OH_MY_POSH" == "true" ]]; then
+  log "Installing oh-my-posh"
+  ensure_oh_my_posh
 fi
 
 if [[ "$ENSURE_SSH_KEY" == "true" ]]; then
