@@ -19,6 +19,6 @@
       "version": "2.62.0"
     }
   },
-  "postCreateCommand": "git config --global user.name \"${GIT_NAME}\" && git config --global user.email \"${GIT_EMAIL}\" && git config --global init.defaultBranch main && git config --global core.autocrlf input",
+  "postCreateCommand": "if [ \"${GIT_NAME}\" = \"Developer\" ] || [ \"${GIT_EMAIL}\" = \"developer@example.com\" ]; then printf '\\n⚠ WARNING: placeholder git identity in use. Edit GIT_NAME and GIT_EMAIL in .devcontainer/devcontainer.json and rebuild the container.\\n\\n'; fi && git config --global user.name \"${GIT_NAME}\" && git config --global user.email \"${GIT_EMAIL}\" && git config --global init.defaultBranch main && git config --global core.autocrlf input",
   "remoteUser": "vscode"
 }

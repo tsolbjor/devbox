@@ -79,14 +79,28 @@ Edit the `$Config` hashtable at the top of the script:
 $Config = @{
   InstallWindowsTerminal = $true
   InstallVSCode          = $true
-  InstallRancherDesktop   = $true
+  InstallRancherDesktop  = $true
   EnsureWSL              = $true
   WslDefaultVersion      = 2
   UbuntuDistroName       = "Ubuntu"
+
+  # $null = auto-detect (75% of system RAM/CPUs; swap disabled when RAM >= 16 GB)
   WslConfig = @{
-    memory     = "8GB"
-    processors = 4
+    memory     = $null
+    processors = $null
+    swap       = $null
+    localhostForwarding = $true
   }
+
+  # Rancher Desktop VM + Kubernetes (memoryInGB/numberCPUs $null = match WSL allocation)
+  RancherDesktopConfig = @{
+    Configure         = $true
+    memoryInGB        = $null
+    numberCPUs        = $null
+    containerEngine   = "moby"
+    kubernetesEnabled = $true
+  }
+
   VSCodeExtensions = @(
     "ms-vscode-remote.remote-wsl",
     "ms-vscode-remote.remote-containers"

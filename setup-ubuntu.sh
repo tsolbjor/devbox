@@ -129,8 +129,14 @@ if ensure_command fdfind && ! ensure_command fd; then
     echo "→ Creating fd shim at ~/.local/bin/fd"
     mkdir -p "$HOME/.local/bin"
     ln -s "$(command -v fdfind)" "$HOME/.local/bin/fd"
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc" 2>/dev/null || true
   fi
+  # Ensure ~/.local/bin is on PATH in all present shell rc files (idempotent)
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    if [[ -f "$rc" ]] && ! grep -q '\.local/bin' "$rc"; then
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
+      echo "→ Added ~/.local/bin to PATH in $(basename "$rc")"
+    fi
+  done
 fi
 
 log "Ensuring code directory"
@@ -145,16 +151,22 @@ if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
 fi
 
 if [[ "$INSTALL_GITHUB_CLI" == "true" ]]; then
-  log "Installing GitHub CLI (gh) if available"
+  log "Installing GitHub CLI (gh)"
   if ensure_command gh; then
     echo "✓ gh already installed"
   else
-    # Ubuntu repo version is usually good enough; keep it simple and idempotent
-    if apt-cache show gh >/dev/null 2>&1; then
-      ensure_pkg "gh"
-    else
-      echo "⚠ gh not found in apt repo for this Ubuntu. Skipping."
+    echo "→ Adding GitHub CLI official apt repo"
+    if [[ ! -f /usr/share/keyrings/githubcli-archive-keyring.gpg ]]; then
+      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+      sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
     fi
+    if [[ ! -f /etc/apt/sources.list.d/github-cli.list ]]; then
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+      sudo apt-get update -y
+    fi
+    sudo apt-get install -y gh
   fi
 fi
 

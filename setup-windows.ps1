@@ -15,10 +15,12 @@ $Config = @{
   SetUbuntuAsDefaultInWindowsTerminal = $true
 
   # WSL resource limits (writes ~/.wslconfig on Windows side).
-  # Set memory/processors to $null to auto-detect (75% of system resources).
+  # Set memory/processors/swap to $null to auto-detect (75% of system resources;
+  # swap is disabled automatically when the allocated RAM is >= 16 GB).
   WslConfig = @{
     memory     = $null   # e.g. "8GB", or $null to auto-detect
     processors = $null   # e.g. 4,   or $null to auto-detect
+    swap       = $null   # e.g. 0 (disable), "4GB", or $null to auto-detect
     localhostForwarding = $true
   }
 
@@ -58,7 +60,8 @@ function Get-WslAllocation {
   param($TotalRAMGB, $LogicalCPUs)
   $memGB = [Math]::Max(2, [Math]::Floor($TotalRAMGB * 0.75))
   $cpus  = [Math]::Max(1, [Math]::Floor($LogicalCPUs * 0.75))
-  return @{ MemoryGB = $memGB; CPUs = $cpus }
+  $swap  = if ($memGB -ge 16) { 0 } else { $null }   # disable swap on high-RAM machines
+  return @{ MemoryGB = $memGB; CPUs = $cpus; Swap = $swap }
 }
 
 function Assert-Admin {
@@ -158,6 +161,7 @@ function Ensure-WSLConfigFile {
   $desired += "[wsl2]"
   if ($WslConfig.memory) { $desired += "memory=$($WslConfig.memory)" }
   if ($WslConfig.processors) { $desired += "processors=$($WslConfig.processors)" }
+  if ($null -ne $WslConfig.swap) { $desired += "swap=$($WslConfig.swap)" }
   if ($null -ne $WslConfig.localhostForwarding) {
     $val = if ($WslConfig.localhostForwarding) { "true" } else { "false" }
     $desired += "localhostForwarding=$val"
@@ -250,6 +254,12 @@ function Ensure-RancherDesktopConfig {
     return
   }
 
+  $rdRunning = Get-Process | Where-Object { $_.Name -like "*rancher*desktop*" }
+  if ($rdRunning) {
+    Write-Warning "Rancher Desktop is currently running. Close it before rerunning so settings are not overwritten by the live process."
+    return
+  }
+
   $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
   $changed = $false
 
@@ -304,10 +314,11 @@ Ensure-Winget
 $sys   = Get-SystemResources
 $alloc = Get-WslAllocation -TotalRAMGB $sys.TotalRAMGB -LogicalCPUs $sys.LogicalCPUs
 Write-Host "System resources: $($sys.TotalRAMGB) GB RAM, $($sys.LogicalCPUs) logical CPUs" -ForegroundColor Cyan
-Write-Host "WSL allocation (75%%): $($alloc.MemoryGB) GB RAM, $($alloc.CPUs) CPUs" -ForegroundColor Cyan
+Write-Host "WSL allocation (75%): $($alloc.MemoryGB) GB RAM, $($alloc.CPUs) CPUs, swap=$($alloc.Swap ?? 'WSL default')" -ForegroundColor Cyan
 
 if (-not $Config.WslConfig.memory)     { $Config.WslConfig.memory     = "$($alloc.MemoryGB)GB" }
 if (-not $Config.WslConfig.processors) { $Config.WslConfig.processors = $alloc.CPUs }
+if ($null -eq $Config.WslConfig.swap -and $null -ne $alloc.Swap) { $Config.WslConfig.swap = $alloc.Swap }
 if (-not $Config.RancherDesktopConfig.memoryInGB) { $Config.RancherDesktopConfig.memoryInGB = $alloc.MemoryGB }
 if (-not $Config.RancherDesktopConfig.numberCPUs) { $Config.RancherDesktopConfig.numberCPUs = $alloc.CPUs }
 
