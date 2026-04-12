@@ -24,6 +24,17 @@ $Config = @{
     "Google.CloudSDK"
   )
 
+  # Windows Terminal profile defaults (applied to all profiles via profiles.defaults)
+  WindowsTerminalConfig = @{
+    Configure   = $true
+    FontFace    = "JetBrainsMono Nerd Font"   # matches NERD-Fonts.JetBrainsMono package
+    FontSize    = 12
+    ColorScheme = "One Half Dark"             # built-in scheme, good contrast
+    CursorShape = "bar"                       # "bar", "vintage", "underscore", "filledBox", "emptyBox"
+    BellStyle   = "none"
+    HistorySize = 30000
+  }
+
   # WSL / Ubuntu
   EnsureWSL              = $true
   WslDefaultVersion      = 2
@@ -250,6 +261,62 @@ function Ensure-WindowsTerminalDefaultProfileUbuntu {
   Write-Host "✓ Updated Windows Terminal default profile." -ForegroundColor Green
 }
 
+function Ensure-WindowsTerminalProfileDefaults {
+  param($WtConfig)
+
+  $settingsPath = Get-WindowsTerminalSettingsPath
+  if (-not $settingsPath) {
+    Write-Warning "Windows Terminal settings.json not found. Open Windows Terminal once, then rerun."
+    return
+  }
+
+  $json = Get-Content $settingsPath -Raw | ConvertFrom-Json
+  $changed = $false
+
+  # Ensure profiles.defaults path exists
+  if ($null -eq $json.profiles) {
+    $json | Add-Member -NotePropertyName "profiles" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  if ($null -eq $json.profiles.defaults) {
+    $json.profiles | Add-Member -NotePropertyName "defaults" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  $d = $json.profiles.defaults
+
+  # Font (nested object)
+  if ($null -eq $d.font) {
+    $d | Add-Member -NotePropertyName "font" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  if ($d.font.face -ne $WtConfig.FontFace) {
+    $d.font | Add-Member -NotePropertyName "face" -NotePropertyValue $WtConfig.FontFace -Force
+    $changed = $true
+  }
+  if ($d.font.size -ne $WtConfig.FontSize) {
+    $d.font | Add-Member -NotePropertyName "size" -NotePropertyValue $WtConfig.FontSize -Force
+    $changed = $true
+  }
+
+  # Flat settings
+  foreach ($pair in @(
+    @{ Key = "colorScheme"; Val = $WtConfig.ColorScheme },
+    @{ Key = "cursorShape"; Val = $WtConfig.CursorShape },
+    @{ Key = "bellStyle";   Val = $WtConfig.BellStyle },
+    @{ Key = "historySize"; Val = $WtConfig.HistorySize }
+  )) {
+    if ($d.($pair.Key) -ne $pair.Val) {
+      $d | Add-Member -NotePropertyName $pair.Key -NotePropertyValue $pair.Val -Force
+      $changed = $true
+    }
+  }
+
+  if ($changed) {
+    Write-Host "→ Updating Windows Terminal profile defaults: $settingsPath" -ForegroundColor Cyan
+    ($json | ConvertTo-Json -Depth 50) | Set-Content -Path $settingsPath -Encoding UTF8
+    Write-Host "✓ Windows Terminal profile defaults configured." -ForegroundColor Green
+  } else {
+    Write-Host "✓ Windows Terminal profile defaults already match desired settings." -ForegroundColor Green
+  }
+}
+
 function Ensure-VSCodeExtensions {
   param([string[]]$Extensions)
 
@@ -415,6 +482,10 @@ Ensure-WSLConfigFile -WslConfig $Config.WslConfig
 
 if ($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) {
   Ensure-WindowsTerminalDefaultProfileUbuntu -UbuntuName $Config.UbuntuDistroName
+}
+
+if ($Config.WindowsTerminalConfig.Configure) {
+  Ensure-WindowsTerminalProfileDefaults -WtConfig $Config.WindowsTerminalConfig
 }
 
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {
