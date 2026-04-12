@@ -499,6 +499,17 @@ function Enable-OpenSSHAgent {
   Write-Host "✓ OpenSSH Authentication Agent enabled." -ForegroundColor Green
 }
 
+$script:currentStep = 0
+$script:totalSteps  = 0
+
+function Show-Progress {
+  param([Parameter(Mandatory=$true)][string]$Status)
+  $script:currentStep++
+  $pct = [int]($script:currentStep / $script:totalSteps * 100)
+  Write-Progress -Activity "devbox setup" -Status "[$($script:currentStep)/$($script:totalSteps)] $Status" -PercentComplete $pct
+  Write-Host "`n[$($script:currentStep)/$($script:totalSteps)] $Status" -ForegroundColor White
+}
+
 function Add-WslDefenderExclusion {
   $packagesPath = Join-Path $env:LOCALAPPDATA "Packages"
   $existing = (Get-MpPreference).ExclusionPath | Where-Object { $_ -like "*CanonicalGroupLimited*" }
@@ -528,10 +539,20 @@ function Add-WslDefenderExclusion {
 Assert-Admin
 Ensure-Winget
 
-# Detect system resources and resolve any $null allocations to 75% of hardware
+# Pre-compute total step count for progress display
+$totalSteps = 4  # always: detect resources, install apps, configure WSL, apply system settings
+if ($Config.Fonts.Count -gt 0)    { $totalSteps++ }
+if ($Config.CloudCLIs.Count -gt 0) { $totalSteps++ }
+if (($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) -or $Config.WindowsTerminalConfig.Configure) { $totalSteps++ }
+if ($Config.OhMyPosh.Configure)   { $totalSteps++ }
+if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) { $totalSteps++ }
+if ($Config.RancherDesktopConfig.Configure) { $totalSteps++ }
+$script:totalSteps = $totalSteps
+
+Show-Progress "Detecting system resources"
 $sys   = Get-SystemResources
 $alloc = Get-WslAllocation -TotalRAMGB $sys.TotalRAMGB -LogicalCPUs $sys.LogicalCPUs
-Write-Host "System resources: $($sys.TotalRAMGB) GB RAM, $($sys.LogicalCPUs) logical CPUs" -ForegroundColor Cyan
+Write-Host "System: $($sys.TotalRAMGB) GB RAM, $($sys.LogicalCPUs) logical CPUs" -ForegroundColor Cyan
 $swapDisplay = if ($null -eq $alloc.Swap) { "WSL default" } else { $alloc.Swap }
 Write-Host "WSL allocation (75%): $($alloc.MemoryGB) GB RAM, $($alloc.CPUs) CPUs, swap=$swapDisplay" -ForegroundColor Cyan
 
@@ -541,6 +562,7 @@ if ($null -eq $Config.WslConfig.swap -and $null -ne $alloc.Swap) { $Config.WslCo
 if (-not $Config.RancherDesktopConfig.memoryInGB) { $Config.RancherDesktopConfig.memoryInGB = $alloc.MemoryGB }
 if (-not $Config.RancherDesktopConfig.numberCPUs) { $Config.RancherDesktopConfig.numberCPUs = $alloc.CPUs }
 
+Show-Progress "Installing apps"
 if ($Config.InstallWindowsTerminal) { Install-WingetPackage -Id "Microsoft.WindowsTerminal" }
 if ($Config.InstallVSCode)          { Install-WingetPackage -Id "Microsoft.VisualStudioCode" }
 if ($Config.InstallRancherDesktop)  { Install-WingetPackage -Id "SUSE.RancherDesktop" }
@@ -551,39 +573,53 @@ if ($Config.InstallGit) {
 if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.PowerToys" }
 if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
 
-foreach ($font in $Config.Fonts)     { Install-WingetPackage -Id $font }
-foreach ($cli  in $Config.CloudCLIs) { Install-WingetPackage -Id $cli }
+if ($Config.Fonts.Count -gt 0) {
+  Show-Progress "Installing fonts"
+  foreach ($font in $Config.Fonts) { Install-WingetPackage -Id $font }
+}
 
+if ($Config.CloudCLIs.Count -gt 0) {
+  Show-Progress "Installing cloud CLIs"
+  foreach ($cli in $Config.CloudCLIs) { Install-WingetPackage -Id $cli }
+}
+
+Show-Progress "Configuring WSL"
 if ($Config.EnsureWSL) {
   Ensure-WSL -DistroName $Config.UbuntuDistroName -DefaultVersion $Config.WslDefaultVersion
 }
-
 Ensure-WSLConfigFile -WslConfig $Config.WslConfig
 
-if ($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) {
-  Ensure-WindowsTerminalDefaultProfileUbuntu -UbuntuName $Config.UbuntuDistroName
-}
-
-if ($Config.WindowsTerminalConfig.Configure) {
-  Ensure-WindowsTerminalProfileDefaults -WtConfig $Config.WindowsTerminalConfig
+if (($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) -or $Config.WindowsTerminalConfig.Configure) {
+  Show-Progress "Configuring Windows Terminal"
+  if ($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) {
+    Ensure-WindowsTerminalDefaultProfileUbuntu -UbuntuName $Config.UbuntuDistroName
+  }
+  if ($Config.WindowsTerminalConfig.Configure) {
+    Ensure-WindowsTerminalProfileDefaults -WtConfig $Config.WindowsTerminalConfig
+  }
 }
 
 if ($Config.OhMyPosh.Configure) {
+  Show-Progress "Configuring Oh My Posh"
   Ensure-OhMyPoshPowerShell -Theme $Config.OhMyPosh.Theme
 }
 
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {
+  Show-Progress "Installing VS Code extensions"
   Ensure-VSCodeExtensions -Extensions $Config.VSCodeExtensions
 }
 
 if ($Config.RancherDesktopConfig.Configure) {
+  Show-Progress "Configuring Rancher Desktop"
   Ensure-RancherDesktopConfig -RdConfig $Config.RancherDesktopConfig
 }
 
+Show-Progress "Applying system settings"
 if ($Config.EnableLongPaths)        { Enable-LongPaths }
 if ($Config.EnableOpenSSHAgent)     { Enable-OpenSSHAgent }
 if ($Config.ExcludeWslFromDefender) { Add-WslDefenderExclusion }
 
+Write-Progress -Activity "devbox setup" -Completed
 Write-Host "`nDone." -ForegroundColor Green
 Write-Host "Tip: Apply WSL resource changes with: wsl --shutdown" -ForegroundColor Cyan
 Write-Host "Tip: Restart Rancher Desktop to apply VM resource changes." -ForegroundColor Cyan

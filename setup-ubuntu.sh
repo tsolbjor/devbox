@@ -53,7 +53,13 @@ SSH_KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/id_ed25519}"
 # IMPLEMENTATION
 # =========================
 
-log() { printf "\n%s\n" "$*"; }
+CURRENT_STEP=0
+TOTAL_STEPS=0
+
+log() {
+  CURRENT_STEP=$(( CURRENT_STEP + 1 ))
+  printf "\n[%d/%d] %s\n" "$CURRENT_STEP" "$TOTAL_STEPS" "$*"
+}
 
 is_pkg_installed() {
   dpkg -s "$1" >/dev/null 2>&1
@@ -286,6 +292,17 @@ if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
   fi
 fi
 
+# Compute total step count for progress display
+TOTAL_STEPS=8  # apt update, base packages, wsl.conf, zsh, fd shim, fzf, code dir, Done
+[[ "$SET_GIT_DEFAULTS"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_GITHUB_CLI" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_KUBECTL"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_HELM"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_K9S"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_KUBECTX"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_OH_MY_POSH" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$ENSURE_SSH_KEY"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+
 log "Updating apt metadata"
 sudo apt-get update -y
 
@@ -297,6 +314,7 @@ done
 log "Configuring /etc/wsl.conf"
 ensure_wsl_conf
 
+log "Setting up zsh"
 # Ensure .zshrc exists so later sections (fd PATH, fzf, oh-my-posh) can write to it
 if is_pkg_installed zsh; then
   if [[ ! -f "$HOME/.zshrc" ]]; then
@@ -318,6 +336,7 @@ if is_pkg_installed zsh; then
   fi
 fi
 
+log "Setting up fd shim"
 # fd package is called fd-find on Ubuntu; provide `fd` alias symlink idempotently
 if ensure_command fdfind && ! ensure_command fd; then
   if [[ -L "$HOME/.local/bin/fd" || -f "$HOME/.local/bin/fd" ]]; then
