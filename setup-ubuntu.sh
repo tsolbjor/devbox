@@ -15,7 +15,9 @@ CODE_DIR="${CODE_DIR:-$HOME/code}"
 APT_PACKAGES=(
   ca-certificates
   curl
+  wget
   unzip
+  zip
   git
   gnupg
   lsb-release
@@ -23,12 +25,18 @@ APT_PACKAGES=(
   jq
   ripgrep
   fd-find
+  fzf
+  zsh
 )
 
 # Optional installs
 INSTALL_GITHUB_CLI="${INSTALL_GITHUB_CLI:-true}"
+INSTALL_KUBECTL="${INSTALL_KUBECTL:-true}"
+KUBECTL_VERSION="${KUBECTL_VERSION:-v1.32}"   # Kubernetes minor version for apt repo
+INSTALL_HELM="${INSTALL_HELM:-true}"
 INSTALL_OH_MY_POSH="${INSTALL_OH_MY_POSH:-true}"
 OH_MY_POSH_THEME="${OH_MY_POSH_THEME:-jandedobbeleer}"   # name from https://ohmyposh.dev/docs/themes
+SET_ZSH_DEFAULT="${SET_ZSH_DEFAULT:-true}"
 SET_GIT_DEFAULTS="${SET_GIT_DEFAULTS:-true}"
 ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
 
@@ -95,6 +103,63 @@ ensure_ssh_key() {
 
 ensure_command() {
   command -v "$1" >/dev/null 2>&1
+}
+
+ensure_kubectl() {
+  if ensure_command kubectl; then
+    echo "✓ kubectl already installed"
+    return
+  fi
+  echo "→ Installing kubectl (${KUBECTL_VERSION})"
+  if [[ ! -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg ]]; then
+    sudo mkdir -p /etc/apt/keyrings
+    curl -fsSL "https://pkgs.k8s.io/core:/stable:/${KUBECTL_VERSION}/deb/Release.key" \
+      | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  fi
+  if [[ ! -f /etc/apt/sources.list.d/kubernetes.list ]]; then
+    echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${KUBECTL_VERSION}/deb/ /" \
+      | sudo tee /etc/apt/sources.list.d/kubernetes.list > /dev/null
+    sudo apt-get update -y
+  fi
+  sudo apt-get install -y kubectl
+  echo "✓ kubectl installed"
+}
+
+ensure_helm() {
+  if ensure_command helm; then
+    echo "✓ helm already installed"
+    return
+  fi
+  echo "→ Installing helm"
+  if [[ ! -f /usr/share/keyrings/helm.gpg ]]; then
+    curl -fsSL https://baltocdn.com/helm/signing.asc \
+      | gpg --dearmor | sudo tee /usr/share/keyrings/helm.gpg > /dev/null
+  fi
+  if [[ ! -f /etc/apt/sources.list.d/helm-stable-debian.list ]]; then
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/helm.gpg] https://baltocdn.com/helm/stable/debian/ all main" \
+      | sudo tee /etc/apt/sources.list.d/helm-stable-debian.list > /dev/null
+    sudo apt-get update -y
+  fi
+  sudo apt-get install -y helm
+  echo "✓ helm installed"
+}
+
+ensure_fzf_shell_integration() {
+  for pair in ".bashrc:bash" ".zshrc:zsh"; do
+    local rc="$HOME/${pair%%:*}"
+    local shell="${pair##*:}"
+    [[ -f "$rc" ]] || continue
+    if grep -q 'fzf' "$rc"; then
+      echo "✓ fzf already in $(basename "$rc")"
+      continue
+    fi
+    local binding="/usr/share/doc/fzf/examples/key-bindings.${shell}"
+    local completion="/usr/share/doc/fzf/examples/completion.${shell}"
+    [[ -f "$binding" ]] || continue
+    echo "→ Adding fzf key bindings to $(basename "$rc")"
+    printf '\nsource %s\n' "$binding" >> "$rc"
+    [[ -f "$completion" ]] && printf 'source %s\n' "$completion" >> "$rc"
+  done
 }
 
 ensure_oh_my_posh() {
@@ -167,6 +232,27 @@ for p in "${APT_PACKAGES[@]}"; do
   ensure_pkg "$p"
 done
 
+# Ensure .zshrc exists so later sections (fd PATH, fzf, oh-my-posh) can write to it
+if is_pkg_installed zsh; then
+  if [[ ! -f "$HOME/.zshrc" ]]; then
+    echo "→ Creating minimal ~/.zshrc"
+    touch "$HOME/.zshrc"
+  else
+    echo "✓ ~/.zshrc exists"
+  fi
+  if [[ "$SET_ZSH_DEFAULT" == "true" ]]; then
+    zsh_path="$(command -v zsh)"
+    current_shell="$(getent passwd "$USER" | cut -d: -f7)"
+    if [[ "$current_shell" == "$zsh_path" ]]; then
+      echo "✓ zsh is already the default shell"
+    else
+      echo "→ Setting zsh as default shell"
+      sudo chsh -s "$zsh_path" "$USER"
+      echo "✓ Default shell set to zsh (takes effect on next login)"
+    fi
+  fi
+fi
+
 # fd package is called fd-find on Ubuntu; provide `fd` alias symlink idempotently
 if ensure_command fdfind && ! ensure_command fd; then
   if [[ -L "$HOME/.local/bin/fd" || -f "$HOME/.local/bin/fd" ]]; then
@@ -185,6 +271,9 @@ if ensure_command fdfind && ! ensure_command fd; then
   done
 fi
 
+log "Configuring fzf shell integration"
+ensure_fzf_shell_integration
+
 log "Ensuring code directory"
 ensure_dir "$CODE_DIR"
 
@@ -194,6 +283,8 @@ if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
   ensure_git_config "user.email" "$GIT_EMAIL"
   ensure_git_config "init.defaultBranch" "$GIT_DEFAULT_BRANCH"
   ensure_git_config "core.autocrlf" "$GIT_AUTOCRLF"
+  ensure_git_config "pull.rebase" "false"
+  ensure_git_config "push.autoSetupRemote" "true"
 fi
 
 if [[ "$INSTALL_GITHUB_CLI" == "true" ]]; then
@@ -214,6 +305,16 @@ if [[ "$INSTALL_GITHUB_CLI" == "true" ]]; then
     fi
     sudo apt-get install -y gh
   fi
+fi
+
+if [[ "$INSTALL_KUBECTL" == "true" ]]; then
+  log "Installing kubectl"
+  ensure_kubectl
+fi
+
+if [[ "$INSTALL_HELM" == "true" ]]; then
+  log "Installing helm"
+  ensure_helm
 fi
 
 if [[ "$INSTALL_OH_MY_POSH" == "true" ]]; then
