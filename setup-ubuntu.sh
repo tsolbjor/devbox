@@ -35,8 +35,10 @@ INSTALL_KUBECTL="${INSTALL_KUBECTL:-true}"
 KUBECTL_VERSION="${KUBECTL_VERSION:-v1.32}"   # Kubernetes minor version for apt repo
 INSTALL_HELM="${INSTALL_HELM:-true}"
 INSTALL_K9S="${INSTALL_K9S:-true}"
+INSTALL_KUBECTX="${INSTALL_KUBECTX:-true}"
 INSTALL_OH_MY_POSH="${INSTALL_OH_MY_POSH:-true}"
 OH_MY_POSH_THEME="${OH_MY_POSH_THEME:-jandedobbeleer}"   # name from https://ohmyposh.dev/docs/themes
+WSL_ENABLE_SYSTEMD="${WSL_ENABLE_SYSTEMD:-true}"   # requires Windows 11 22H2+ / WSL 2.0
 SET_ZSH_DEFAULT="${SET_ZSH_DEFAULT:-true}"
 SET_GIT_DEFAULTS="${SET_GIT_DEFAULTS:-true}"
 ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
@@ -178,6 +180,50 @@ ensure_fzf_shell_integration() {
   done
 }
 
+ensure_wsl_conf() {
+  local conf="/etc/wsl.conf"
+  local boot_line=""
+  [[ "$WSL_ENABLE_SYSTEMD" == "true" ]] && boot_line=$'\n[boot]\nsystemd = true'
+  local desired="[automount]
+options = metadata${boot_line}
+"
+  local current=""
+  [[ -f "$conf" ]] && current=$(cat "$conf")
+  if [[ "$current" == "$desired" ]]; then
+    echo "✓ /etc/wsl.conf already matches desired settings"
+    return
+  fi
+  echo "→ Writing /etc/wsl.conf"
+  printf '%s' "$desired" | sudo tee "$conf" > /dev/null
+  echo "✓ /etc/wsl.conf updated — run 'wsl --shutdown' from Windows then reopen WSL to apply."
+}
+
+ensure_kubectx() {
+  local need_ctx=true need_ns=true
+  ensure_command kubectx && need_ctx=false
+  ensure_command kubens  && need_ns=false
+  if [[ "$need_ctx" == "false" && "$need_ns" == "false" ]]; then
+    echo "✓ kubectx and kubens already installed"
+    return
+  fi
+  echo "→ Installing kubectx and kubens (latest)"
+  local version dpkg_arch arch
+  version=$(curl -fsSL https://api.github.com/repos/ahmetb/kubectx/releases/latest \
+    | grep '"tag_name"' | cut -d'"' -f4)
+  dpkg_arch=$(dpkg --print-architecture)
+  arch=$([ "$dpkg_arch" = "amd64" ] && echo "x86_64" || echo "$dpkg_arch")
+  local base="https://github.com/ahmetb/kubectx/releases/download/${version}"
+  if [[ "$need_ctx" == "true" ]]; then
+    curl -fsSL "${base}/kubectx_${version}_linux_${arch}.tar.gz" \
+      | sudo tar -xz -C /usr/local/bin kubectx
+  fi
+  if [[ "$need_ns" == "true" ]]; then
+    curl -fsSL "${base}/kubens_${version}_linux_${arch}.tar.gz" \
+      | sudo tar -xz -C /usr/local/bin kubens
+  fi
+  echo "✓ kubectx/kubens ${version} installed"
+}
+
 ensure_oh_my_posh() {
   # Install binary
   if ensure_command oh-my-posh; then
@@ -247,6 +293,9 @@ log "Installing base packages"
 for p in "${APT_PACKAGES[@]}"; do
   ensure_pkg "$p"
 done
+
+log "Configuring /etc/wsl.conf"
+ensure_wsl_conf
 
 # Ensure .zshrc exists so later sections (fd PATH, fzf, oh-my-posh) can write to it
 if is_pkg_installed zsh; then
@@ -338,6 +387,11 @@ if [[ "$INSTALL_K9S" == "true" ]]; then
   ensure_k9s
 fi
 
+if [[ "$INSTALL_KUBECTX" == "true" ]]; then
+  log "Installing kubectx and kubens"
+  ensure_kubectx
+fi
+
 if [[ "$INSTALL_OH_MY_POSH" == "true" ]]; then
   log "Installing oh-my-posh"
   ensure_oh_my_posh
@@ -350,6 +404,13 @@ fi
 
 log "Done."
 echo "Next steps:"
-echo " - Clone repos into: $CODE_DIR"
-echo " - Open from WSL: cd <repo> && code ."
-echo " - Then: 'Reopen in Container' when .devcontainer/ exists"
+if [[ -f "${SSH_KEY_PATH}.pub" ]]; then
+  echo " 1. Add your SSH public key to GitHub → https://github.com/settings/keys"
+  echo "    $(cat "${SSH_KEY_PATH}.pub")"
+else
+  echo " 1. Generate an SSH key and add it to GitHub → https://github.com/settings/keys"
+fi
+echo " 2. Authenticate GitHub CLI: gh auth login"
+echo " 3. Clone repos into: $CODE_DIR"
+echo " 4. Open a repo: cd <repo> && code ."
+echo " 5. Select 'Reopen in Container' in VS Code when a .devcontainer/ exists"

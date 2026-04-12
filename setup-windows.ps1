@@ -9,6 +9,15 @@ $Config = @{
   InstallRancherDesktop  = $true
   InstallGit             = $true
   InstallPowerToys       = $true
+
+  # Git for Windows global config (applied after Git is installed)
+  GitConfig = @{
+    Configure       = $true
+    AutoCRLF        = "true"   # Windows: convert LF→CRLF on checkout (opposite of WSL's "input")
+    DefaultBranch   = "main"
+    PullRebase      = "false"
+    AutoSetupRemote = "true"
+  }
   Install7Zip            = $true
 
   # Oh My Posh — prompt theme engine; configures PowerShell profiles for PS5 and PS7
@@ -436,6 +445,32 @@ function Ensure-RancherDesktopConfig {
   }
 }
 
+function Ensure-GitSetting {
+  param(
+    [Parameter(Mandatory=$true)][string]$Key,
+    [Parameter(Mandatory=$true)][string]$Value
+  )
+  $current = git config --global --get $Key 2>$null
+  if ($current -eq $Value) {
+    Write-Host "✓ git config $Key = $Value" -ForegroundColor Green
+    return
+  }
+  Write-Host "→ Setting git config $Key = $Value" -ForegroundColor Cyan
+  git config --global $Key $Value
+}
+
+function Ensure-WindowsGitConfig {
+  param($GitConfig)
+  if (-not (Test-Command "git")) {
+    Write-Warning "git not in PATH yet — open a new terminal after installation and rerun to apply git config."
+    return
+  }
+  Ensure-GitSetting "core.autocrlf"        $GitConfig.AutoCRLF
+  Ensure-GitSetting "init.defaultBranch"   $GitConfig.DefaultBranch
+  Ensure-GitSetting "pull.rebase"          $GitConfig.PullRebase
+  Ensure-GitSetting "push.autoSetupRemote" $GitConfig.AutoSetupRemote
+}
+
 function Enable-LongPaths {
   $key = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
   $current = (Get-ItemProperty -Path $key -Name "LongPathsEnabled" -ErrorAction SilentlyContinue).LongPathsEnabled
@@ -509,7 +544,10 @@ if (-not $Config.RancherDesktopConfig.numberCPUs) { $Config.RancherDesktopConfig
 if ($Config.InstallWindowsTerminal) { Install-WingetPackage -Id "Microsoft.WindowsTerminal" }
 if ($Config.InstallVSCode)          { Install-WingetPackage -Id "Microsoft.VisualStudioCode" }
 if ($Config.InstallRancherDesktop)  { Install-WingetPackage -Id "SUSE.RancherDesktop" }
-if ($Config.InstallGit)             { Install-WingetPackage -Id "Git.Git" }
+if ($Config.InstallGit) {
+  Install-WingetPackage -Id "Git.Git"
+  if ($Config.GitConfig.Configure) { Ensure-WindowsGitConfig -GitConfig $Config.GitConfig }
+}
 if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.PowerToys" }
 if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
 
