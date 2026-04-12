@@ -9,6 +9,7 @@ $Config = @{
   InstallRancherDesktop  = $true
   InstallGit             = $true
   InstallPowerToys       = $true
+  Install7Zip            = $true
 
   # Fonts (winget IDs)
   Fonts = @(
@@ -401,6 +402,7 @@ if ($Config.InstallVSCode)          { Install-WingetPackage -Id "Microsoft.Visua
 if ($Config.InstallRancherDesktop)  { Install-WingetPackage -Id "SUSE.RancherDesktop" }
 if ($Config.InstallGit)             { Install-WingetPackage -Id "Git.Git" }
 if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.PowerToys" }
+if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
 
 foreach ($font in $Config.Fonts)     { Install-WingetPackage -Id $font }
 foreach ($cli  in $Config.CloudCLIs) { Install-WingetPackage -Id $cli }
