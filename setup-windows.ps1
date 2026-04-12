@@ -14,11 +14,22 @@ $Config = @{
   UbuntuDistroName       = "Ubuntu"   # e.g. "Ubuntu", "Ubuntu-22.04", "Ubuntu-24.04"
   SetUbuntuAsDefaultInWindowsTerminal = $true
 
-  # WSL resource limits (writes ~/.wslconfig on Windows side)
+  # WSL resource limits (writes ~/.wslconfig on Windows side).
+  # Set memory/processors to $null to auto-detect (75% of system resources).
   WslConfig = @{
-    memory     = "8GB"
-    processors = 4
+    memory     = $null   # e.g. "8GB", or $null to auto-detect
+    processors = $null   # e.g. 4,   or $null to auto-detect
     localhostForwarding = $true
+  }
+
+  # Rancher Desktop VM + Kubernetes settings.
+  # memoryInGB / numberCPUs: $null = match WSL allocation.
+  RancherDesktopConfig = @{
+    Configure         = $true
+    memoryInGB        = $null   # $null = match WSL allocation
+    numberCPUs        = $null   # $null = match WSL allocation
+    containerEngine   = "moby"  # "moby" for Docker-compatible CLI
+    kubernetesEnabled = $true
   }
 
   # Optional: VS Code extensions installed on Windows (not inside containers)
@@ -34,6 +45,21 @@ $Config = @{
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Get-SystemResources {
+  $cs = Get-CimInstance Win32_ComputerSystem
+  return @{
+    TotalRAMGB   = [Math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
+    LogicalCPUs  = [int]$cs.NumberOfLogicalProcessors
+  }
+}
+
+function Get-WslAllocation {
+  param($TotalRAMGB, $LogicalCPUs)
+  $memGB = [Math]::Max(2, [Math]::Floor($TotalRAMGB * 0.75))
+  $cpus  = [Math]::Max(1, [Math]::Floor($LogicalCPUs * 0.75))
+  return @{ MemoryGB = $memGB; CPUs = $cpus }
+}
 
 function Assert-Admin {
   $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -215,12 +241,75 @@ function Ensure-VSCodeExtensions {
   }
 }
 
+function Ensure-RancherDesktopConfig {
+  param($RdConfig)
+
+  $settingsPath = Join-Path $env:APPDATA "rancher-desktop\settings.json"
+  if (-not (Test-Path $settingsPath)) {
+    Write-Warning "Rancher Desktop settings.json not found at $settingsPath. Launch Rancher Desktop once to initialise it, then rerun."
+    return
+  }
+
+  $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+  $changed = $false
+
+  # Virtual machine resources
+  if ($null -eq $settings.virtualMachine) {
+    $settings | Add-Member -NotePropertyName "virtualMachine" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  if ($settings.virtualMachine.memoryInGB -ne $RdConfig.memoryInGB) {
+    $settings.virtualMachine.memoryInGB = $RdConfig.memoryInGB
+    $changed = $true
+  }
+  if ($settings.virtualMachine.numberCPUs -ne $RdConfig.numberCPUs) {
+    $settings.virtualMachine.numberCPUs = $RdConfig.numberCPUs
+    $changed = $true
+  }
+
+  # Container engine (moby = Docker-compatible)
+  if ($null -eq $settings.containerEngine) {
+    $settings | Add-Member -NotePropertyName "containerEngine" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  if ($settings.containerEngine.name -ne $RdConfig.containerEngine) {
+    $settings.containerEngine.name = $RdConfig.containerEngine
+    $changed = $true
+  }
+
+  # Kubernetes
+  if ($null -eq $settings.kubernetes) {
+    $settings | Add-Member -NotePropertyName "kubernetes" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  if ($settings.kubernetes.enabled -ne $RdConfig.kubernetesEnabled) {
+    $settings.kubernetes.enabled = $RdConfig.kubernetesEnabled
+    $changed = $true
+  }
+
+  if ($changed) {
+    Write-Host "→ Writing Rancher Desktop settings: $settingsPath" -ForegroundColor Cyan
+    ($settings | ConvertTo-Json -Depth 20) | Set-Content -Path $settingsPath -Encoding UTF8
+    Write-Host "✓ Rancher Desktop configured (restart Rancher Desktop to apply)." -ForegroundColor Green
+  } else {
+    Write-Host "✓ Rancher Desktop settings already match desired configuration." -ForegroundColor Green
+  }
+}
+
 # =========================
 # RUN
 # =========================
 
 Assert-Admin
 Ensure-Winget
+
+# Detect system resources and resolve any $null allocations to 75% of hardware
+$sys   = Get-SystemResources
+$alloc = Get-WslAllocation -TotalRAMGB $sys.TotalRAMGB -LogicalCPUs $sys.LogicalCPUs
+Write-Host "System resources: $($sys.TotalRAMGB) GB RAM, $($sys.LogicalCPUs) logical CPUs" -ForegroundColor Cyan
+Write-Host "WSL allocation (75%%): $($alloc.MemoryGB) GB RAM, $($alloc.CPUs) CPUs" -ForegroundColor Cyan
+
+if (-not $Config.WslConfig.memory)     { $Config.WslConfig.memory     = "$($alloc.MemoryGB)GB" }
+if (-not $Config.WslConfig.processors) { $Config.WslConfig.processors = $alloc.CPUs }
+if (-not $Config.RancherDesktopConfig.memoryInGB) { $Config.RancherDesktopConfig.memoryInGB = $alloc.MemoryGB }
+if (-not $Config.RancherDesktopConfig.numberCPUs) { $Config.RancherDesktopConfig.numberCPUs = $alloc.CPUs }
 
 if ($Config.InstallWindowsTerminal) { Install-WingetPackage -Id "Microsoft.WindowsTerminal" }
 if ($Config.InstallVSCode)          { Install-WingetPackage -Id "Microsoft.VisualStudioCode" }
@@ -240,5 +329,10 @@ if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {
   Ensure-VSCodeExtensions -Extensions $Config.VSCodeExtensions
 }
 
+if ($Config.RancherDesktopConfig.Configure) {
+  Ensure-RancherDesktopConfig -RdConfig $Config.RancherDesktopConfig
+}
+
 Write-Host "`nDone." -ForegroundColor Green
 Write-Host "Tip: Apply WSL resource changes with: wsl --shutdown" -ForegroundColor Cyan
+Write-Host "Tip: Restart Rancher Desktop to apply VM resource changes." -ForegroundColor Cyan
