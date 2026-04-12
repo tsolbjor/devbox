@@ -34,6 +34,7 @@ INSTALL_GITHUB_CLI="${INSTALL_GITHUB_CLI:-true}"
 INSTALL_KUBECTL="${INSTALL_KUBECTL:-true}"
 KUBECTL_VERSION="${KUBECTL_VERSION:-v1.32}"   # Kubernetes minor version for apt repo
 INSTALL_HELM="${INSTALL_HELM:-true}"
+INSTALL_K9S="${INSTALL_K9S:-true}"
 INSTALL_OH_MY_POSH="${INSTALL_OH_MY_POSH:-true}"
 OH_MY_POSH_THEME="${OH_MY_POSH_THEME:-jandedobbeleer}"   # name from https://ohmyposh.dev/docs/themes
 SET_ZSH_DEFAULT="${SET_ZSH_DEFAULT:-true}"
@@ -142,6 +143,21 @@ ensure_helm() {
   fi
   sudo apt-get install -y helm
   echo "✓ helm installed"
+}
+
+ensure_k9s() {
+  if ensure_command k9s; then
+    echo "✓ k9s already installed"
+    return
+  fi
+  echo "→ Installing k9s (latest)"
+  local version arch
+  version=$(curl -fsSL https://api.github.com/repos/derailed/k9s/releases/latest \
+    | grep '"tag_name"' | cut -d'"' -f4)
+  arch=$(dpkg --print-architecture)
+  curl -fsSL "https://github.com/derailed/k9s/releases/download/${version}/k9s_Linux_${arch}.tar.gz" \
+    | sudo tar -xz -C /usr/local/bin k9s
+  echo "✓ k9s ${version} installed"
 }
 
 ensure_fzf_shell_integration() {
@@ -315,6 +331,11 @@ fi
 if [[ "$INSTALL_HELM" == "true" ]]; then
   log "Installing helm"
   ensure_helm
+fi
+
+if [[ "$INSTALL_K9S" == "true" ]]; then
+  log "Installing k9s"
+  ensure_k9s
 fi
 
 if [[ "$INSTALL_OH_MY_POSH" == "true" ]]; then
