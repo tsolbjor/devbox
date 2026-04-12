@@ -7,6 +7,21 @@ $Config = @{
   InstallWindowsTerminal = $true
   InstallVSCode          = $true
   InstallRancherDesktop  = $true
+  InstallGit             = $true
+  InstallPowerToys       = $true
+
+  # Fonts (winget IDs)
+  Fonts = @(
+    "Microsoft.CascadiaCode",
+    "NERD-Fonts.JetBrainsMono"
+  )
+
+  # Cloud CLIs (remove any you don't need)
+  CloudCLIs = @(
+    "Microsoft.AzureCLI",
+    "Amazon.AWSCLI",
+    "Google.CloudSDK"
+  )
 
   # WSL / Ubuntu
   EnsureWSL              = $true
@@ -18,9 +33,10 @@ $Config = @{
   # Set memory/processors/swap to $null to auto-detect (75% of system resources;
   # swap is disabled automatically when the allocated RAM is >= 16 GB).
   WslConfig = @{
-    memory     = $null   # e.g. "8GB", or $null to auto-detect
-    processors = $null   # e.g. 4,   or $null to auto-detect
-    swap       = $null   # e.g. 0 (disable), "4GB", or $null to auto-detect
+    memory          = $null   # e.g. "8GB", or $null to auto-detect
+    processors      = $null   # e.g. 4,   or $null to auto-detect
+    swap            = $null   # e.g. 0 (disable), "4GB", or $null to auto-detect
+    networkingMode  = "mirrored"  # "mirrored" requires Windows 11 22H2+ / WSL 2.0; use "nat" for older systems
     localhostForwarding = $true
   }
 
@@ -34,10 +50,16 @@ $Config = @{
     kubernetesEnabled = $true
   }
 
-  # Optional: VS Code extensions installed on Windows (not inside containers)
+  # Windows system settings
+  EnableLongPaths        = $true   # removes 260-char path limit
+  EnableOpenSSHAgent     = $true   # allows SSH key forwarding across the WSL boundary
+  ExcludeWslFromDefender = $true   # excludes WSL vhdx from real-time scanning
+
+  # VS Code extensions installed on Windows (not inside containers)
   VSCodeExtensions = @(
     "ms-vscode-remote.remote-wsl",
-    "ms-vscode-remote.remote-containers"
+    "ms-vscode-remote.remote-containers",
+    "ms-azuretools.vscode-docker"
   )
 }
 
@@ -162,6 +184,7 @@ function Ensure-WSLConfigFile {
   if ($WslConfig.memory) { $desired += "memory=$($WslConfig.memory)" }
   if ($WslConfig.processors) { $desired += "processors=$($WslConfig.processors)" }
   if ($null -ne $WslConfig.swap) { $desired += "swap=$($WslConfig.swap)" }
+  if ($WslConfig.networkingMode) { $desired += "networkingMode=$($WslConfig.networkingMode)" }
   if ($null -ne $WslConfig.localhostForwarding) {
     $val = if ($WslConfig.localhostForwarding) { "true" } else { "false" }
     $desired += "localhostForwarding=$val"
@@ -303,6 +326,56 @@ function Ensure-RancherDesktopConfig {
   }
 }
 
+function Enable-LongPaths {
+  $key = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
+  $current = (Get-ItemProperty -Path $key -Name "LongPathsEnabled" -ErrorAction SilentlyContinue).LongPathsEnabled
+  if ($current -eq 1) {
+    Write-Host "✓ Long path support already enabled." -ForegroundColor Green
+    return
+  }
+  Write-Host "→ Enabling long path support." -ForegroundColor Cyan
+  Set-ItemProperty -Path $key -Name "LongPathsEnabled" -Value 1 -Type DWord
+  Write-Host "✓ Long path support enabled." -ForegroundColor Green
+}
+
+function Enable-OpenSSHAgent {
+  $svc = Get-Service -Name "ssh-agent" -ErrorAction SilentlyContinue
+  if (-not $svc) {
+    Write-Warning "OpenSSH Authentication Agent service not found. Enable OpenSSH Client in Settings → Optional Features, then rerun."
+    return
+  }
+  if ($svc.StartType -eq "Automatic" -and $svc.Status -eq "Running") {
+    Write-Host "✓ OpenSSH Authentication Agent already running (Automatic)." -ForegroundColor Green
+    return
+  }
+  Write-Host "→ Setting OpenSSH Authentication Agent to Automatic and starting it." -ForegroundColor Cyan
+  Set-Service -Name "ssh-agent" -StartupType Automatic
+  Start-Service -Name "ssh-agent"
+  Write-Host "✓ OpenSSH Authentication Agent enabled." -ForegroundColor Green
+}
+
+function Add-WslDefenderExclusion {
+  $packagesPath = Join-Path $env:LOCALAPPDATA "Packages"
+  $existing = (Get-MpPreference).ExclusionPath | Where-Object { $_ -like "*CanonicalGroupLimited*" }
+  if ($existing) {
+    Write-Host "✓ Windows Defender WSL exclusion already configured." -ForegroundColor Green
+    return
+  }
+  $wslDirs = Get-ChildItem -Path $packagesPath -Filter "CanonicalGroupLimited*" -Directory -ErrorAction SilentlyContinue
+  if (-not $wslDirs) {
+    Write-Warning "No WSL package directories found under $packagesPath. Run after WSL is installed."
+    return
+  }
+  foreach ($dir in $wslDirs) {
+    $localState = Join-Path $dir.FullName "LocalState"
+    if (Test-Path $localState) {
+      Write-Host "→ Adding Defender exclusion: $localState" -ForegroundColor Cyan
+      Add-MpPreference -ExclusionPath $localState
+    }
+  }
+  Write-Host "✓ WSL directories excluded from Windows Defender." -ForegroundColor Green
+}
+
 # =========================
 # RUN
 # =========================
@@ -314,7 +387,8 @@ Ensure-Winget
 $sys   = Get-SystemResources
 $alloc = Get-WslAllocation -TotalRAMGB $sys.TotalRAMGB -LogicalCPUs $sys.LogicalCPUs
 Write-Host "System resources: $($sys.TotalRAMGB) GB RAM, $($sys.LogicalCPUs) logical CPUs" -ForegroundColor Cyan
-Write-Host "WSL allocation (75%): $($alloc.MemoryGB) GB RAM, $($alloc.CPUs) CPUs, swap=$($alloc.Swap ?? 'WSL default')" -ForegroundColor Cyan
+$swapDisplay = if ($null -eq $alloc.Swap) { "WSL default" } else { $alloc.Swap }
+Write-Host "WSL allocation (75%): $($alloc.MemoryGB) GB RAM, $($alloc.CPUs) CPUs, swap=$swapDisplay" -ForegroundColor Cyan
 
 if (-not $Config.WslConfig.memory)     { $Config.WslConfig.memory     = "$($alloc.MemoryGB)GB" }
 if (-not $Config.WslConfig.processors) { $Config.WslConfig.processors = $alloc.CPUs }
@@ -325,6 +399,11 @@ if (-not $Config.RancherDesktopConfig.numberCPUs) { $Config.RancherDesktopConfig
 if ($Config.InstallWindowsTerminal) { Install-WingetPackage -Id "Microsoft.WindowsTerminal" }
 if ($Config.InstallVSCode)          { Install-WingetPackage -Id "Microsoft.VisualStudioCode" }
 if ($Config.InstallRancherDesktop)  { Install-WingetPackage -Id "SUSE.RancherDesktop" }
+if ($Config.InstallGit)             { Install-WingetPackage -Id "Git.Git" }
+if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.PowerToys" }
+
+foreach ($font in $Config.Fonts)     { Install-WingetPackage -Id $font }
+foreach ($cli  in $Config.CloudCLIs) { Install-WingetPackage -Id $cli }
 
 if ($Config.EnsureWSL) {
   Ensure-WSL -DistroName $Config.UbuntuDistroName -DefaultVersion $Config.WslDefaultVersion
@@ -343,6 +422,10 @@ if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {
 if ($Config.RancherDesktopConfig.Configure) {
   Ensure-RancherDesktopConfig -RdConfig $Config.RancherDesktopConfig
 }
+
+if ($Config.EnableLongPaths)        { Enable-LongPaths }
+if ($Config.EnableOpenSSHAgent)     { Enable-OpenSSHAgent }
+if ($Config.ExcludeWslFromDefender) { Add-WslDefenderExclusion }
 
 Write-Host "`nDone." -ForegroundColor Green
 Write-Host "Tip: Apply WSL resource changes with: wsl --shutdown" -ForegroundColor Cyan

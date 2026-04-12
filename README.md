@@ -80,15 +80,21 @@ $Config = @{
   InstallWindowsTerminal = $true
   InstallVSCode          = $true
   InstallRancherDesktop  = $true
-  EnsureWSL              = $true
-  WslDefaultVersion      = 2
-  UbuntuDistroName       = "Ubuntu"
+  InstallGit             = $true
+  InstallPowerToys       = $true
+
+  Fonts     = @("Microsoft.CascadiaCode", "NERD-Fonts.JetBrainsMono")
+  CloudCLIs = @("Microsoft.AzureCLI", "Amazon.AWSCLI", "Google.CloudSDK")
+
+  EnsureWSL         = $true
+  UbuntuDistroName  = "Ubuntu"
 
   # $null = auto-detect (75% of system RAM/CPUs; swap disabled when RAM >= 16 GB)
   WslConfig = @{
-    memory     = $null
-    processors = $null
-    swap       = $null
+    memory         = $null
+    processors     = $null
+    swap           = $null
+    networkingMode = "mirrored"  # requires Windows 11 22H2+ / WSL 2.0
     localhostForwarding = $true
   }
 
@@ -101,9 +107,14 @@ $Config = @{
     kubernetesEnabled = $true
   }
 
+  EnableLongPaths        = $true
+  EnableOpenSSHAgent     = $true
+  ExcludeWslFromDefender = $true
+
   VSCodeExtensions = @(
     "ms-vscode-remote.remote-wsl",
-    "ms-vscode-remote.remote-containers"
+    "ms-vscode-remote.remote-containers",
+    "ms-azuretools.vscode-docker"
   )
 }
 ```
