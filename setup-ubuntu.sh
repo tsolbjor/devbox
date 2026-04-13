@@ -38,6 +38,7 @@ INSTALL_K9S="${INSTALL_K9S:-true}"
 INSTALL_KUBECTX="${INSTALL_KUBECTX:-true}"
 INSTALL_OH_MY_POSH="${INSTALL_OH_MY_POSH:-true}"
 OH_MY_POSH_THEME="${OH_MY_POSH_THEME:-jandedobbeleer}"   # name from https://ohmyposh.dev/docs/themes
+CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-true}"   # set false on native Linux (not WSL)
 WSL_ENABLE_SYSTEMD="${WSL_ENABLE_SYSTEMD:-true}"   # requires Windows 11 22H2+ / WSL 2.0
 SET_ZSH_DEFAULT="${SET_ZSH_DEFAULT:-true}"
 SET_GIT_DEFAULTS="${SET_GIT_DEFAULTS:-true}"
@@ -293,7 +294,8 @@ if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
 fi
 
 # Compute total step count for progress display
-TOTAL_STEPS=8  # apt update, base packages, wsl.conf, zsh, fd shim, fzf, code dir, Done
+TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
+[[ "$CONFIGURE_WSL_CONF" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$SET_GIT_DEFAULTS"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_GITHUB_CLI" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_KUBECTL"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -311,8 +313,10 @@ for p in "${APT_PACKAGES[@]}"; do
   ensure_pkg "$p"
 done
 
-log "Configuring /etc/wsl.conf"
-ensure_wsl_conf
+if [[ "$CONFIGURE_WSL_CONF" == "true" ]]; then
+  log "Configuring /etc/wsl.conf"
+  ensure_wsl_conf
+fi
 
 log "Setting up zsh"
 # Ensure .zshrc exists so later sections (fd PATH, fzf, oh-my-posh) can write to it
