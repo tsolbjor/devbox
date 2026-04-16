@@ -44,13 +44,12 @@ $Config = @{
     Configure          = $true
     FontPackageId      = "NERD-Fonts.JetBrainsMono"
     FontDownloadUrl    = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.zip"
-    FontFace           = "JetBrainsMono Nerd Font"
+    FontArchiveFilter  = "*Mono*.ttf"
+    FontFace           = "JetBrainsMono Nerd Font Mono"
     FontFaceCandidates = @(
-      "JetBrainsMono Nerd Font",
       "JetBrainsMono Nerd Font Mono",
-      "JetBrainsMono Nerd Font Propo",
       "JetBrainsMono NFM",
-      "JetBrainsMono NFP",
+      "JetBrainsMono Nerd Font",
       "JetBrainsMono NF"
     )
     FontSize           = 12
@@ -288,7 +287,8 @@ function Install-NerdFontArchive {
   param(
     [Parameter(Mandatory=$true)][string]$PackageId,
     [Parameter(Mandatory=$true)][string]$DownloadUrl,
-    [Parameter(Mandatory=$true)][string[]]$FontFaces
+    [Parameter(Mandatory=$true)][string[]]$FontFaces,
+    [string]$ArchiveFilter = "*"
   )
 
   $matchedFace = Wait-ForFontRegistration -FontFaces $FontFaces -MaxAttempts 1 -StatusLabel $PackageId
@@ -315,10 +315,13 @@ function Install-NerdFontArchive {
   Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 
   $fontFiles = Get-ChildItem -Path $extractDir -Recurse -Include *.ttf,*.otf -File |
-    Where-Object { $_.Name -notmatch 'Windows Compatible' }
+    Where-Object {
+      $_.Name -notmatch 'Windows Compatible' -and
+      $_.Name -like $ArchiveFilter
+    }
 
   if (-not $fontFiles) {
-    throw "No font files found in downloaded archive: $DownloadUrl"
+    throw "No font files matching '$ArchiveFilter' found in downloaded archive: $DownloadUrl"
   }
 
   $fontsFolder = (New-Object -ComObject Shell.Application).Namespace(0x14)
@@ -792,7 +795,8 @@ if ($Config.Fonts.Count -gt 0) {
       Install-NerdFontArchive `
         -PackageId $font `
         -DownloadUrl $Config.WindowsTerminalConfig.FontDownloadUrl `
-        -FontFaces $Config.WindowsTerminalConfig.FontFaceCandidates | Out-Null
+        -FontFaces $Config.WindowsTerminalConfig.FontFaceCandidates `
+        -ArchiveFilter $Config.WindowsTerminalConfig.FontArchiveFilter | Out-Null
       continue
     }
 
