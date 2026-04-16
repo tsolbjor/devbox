@@ -70,7 +70,7 @@ $Config = @{
     processors      = $null   # e.g. 4,   or $null to auto-detect
     swap            = $null   # e.g. 0 (disable), "4GB", or $null to auto-detect
     networkingMode  = "mirrored"  # "mirrored" requires Windows 11 22H2+ / WSL 2.0; use "nat" for older systems
-    localhostForwarding = $true
+    localhostForwarding = $null   # Ignored by WSL when networkingMode=mirrored; set only for NAT mode
   }
 
   # Rancher Desktop VM + Kubernetes settings.
@@ -283,6 +283,7 @@ function Ensure-WSLConfigFile {
   )
 
   $path = Join-Path $env:USERPROFILE ".wslconfig"
+  $isMirroredNetworking = $WslConfig.networkingMode -eq "mirrored"
 
   $desired = @()
   $desired += "[wsl2]"
@@ -290,7 +291,9 @@ function Ensure-WSLConfigFile {
   if ($WslConfig.processors) { $desired += "processors=$($WslConfig.processors)" }
   if ($null -ne $WslConfig.swap) { $desired += "swap=$($WslConfig.swap)" }
   if ($WslConfig.networkingMode) { $desired += "networkingMode=$($WslConfig.networkingMode)" }
-  if ($null -ne $WslConfig.localhostForwarding) {
+  if ($isMirroredNetworking -and $null -ne $WslConfig.localhostForwarding) {
+    Write-Warning "Skipping localhostForwarding because WSL ignores it when networkingMode=mirrored."
+  } elseif ($null -ne $WslConfig.localhostForwarding) {
     $val = if ($WslConfig.localhostForwarding) { "true" } else { "false" }
     $desired += "localhostForwarding=$val"
   }

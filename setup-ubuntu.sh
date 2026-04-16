@@ -203,6 +203,7 @@ options = metadata${boot_line}
   echo "→ Writing /etc/wsl.conf"
   printf '%s' "$desired" | sudo tee "$conf" > /dev/null
   echo "✓ /etc/wsl.conf updated — run 'wsl --shutdown' from Windows then reopen WSL to apply."
+  echo "  Note: network settings like mirrored mode and localhostForwarding belong in %UserProfile%/.wslconfig on Windows, not /etc/wsl.conf."
 }
 
 ensure_kubectx() {
