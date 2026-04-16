@@ -43,6 +43,7 @@ $Config = @{
   WindowsTerminalConfig = @{
     Configure          = $true
     FontPackageId      = "NERD-Fonts.JetBrainsMono"
+    FontDownloadUrl    = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.zip"
     FontFace           = "JetBrainsMono Nerd Font"
     FontFaceCandidates = @(
       "JetBrainsMono Nerd Font",
@@ -254,6 +255,89 @@ function Ensure-FontPackageRegistered {
   }
 
   Write-Warning "Installed '$PackageId', but Windows did not register any expected font family: $($FontFaces -join ', ')."
+  Write-Warning "A sign out or reboot may still be required before Windows Terminal can use the new font."
+  return $null
+}
+
+function Wait-ForFontRegistration {
+  param(
+    [Parameter(Mandatory=$true)][string[]]$FontFaces,
+    [int]$MaxAttempts = 10,
+    [int]$RetryDelaySeconds = 2,
+    [string]$StatusLabel = "fonts"
+  )
+
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    $installedFonts = Get-InstalledFontFamilies
+    $matchedFace = $FontFaces | Where-Object { $installedFonts -contains $_ } | Select-Object -First 1
+    if ($matchedFace) {
+      Write-Host "✓ Font registered: $matchedFace" -ForegroundColor Green
+      return $matchedFace
+    }
+
+    if ($attempt -lt $MaxAttempts) {
+      Write-Host "→ Waiting for font registration: $StatusLabel (attempt $attempt/$MaxAttempts)" -ForegroundColor Cyan
+      Start-Sleep -Seconds $RetryDelaySeconds
+    }
+  }
+
+  return $null
+}
+
+function Install-NerdFontArchive {
+  param(
+    [Parameter(Mandatory=$true)][string]$PackageId,
+    [Parameter(Mandatory=$true)][string]$DownloadUrl,
+    [Parameter(Mandatory=$true)][string[]]$FontFaces
+  )
+
+  $matchedFace = Wait-ForFontRegistration -FontFaces $FontFaces -MaxAttempts 1 -StatusLabel $PackageId
+  if ($matchedFace) {
+    return $matchedFace
+  }
+
+  $tempRoot = Join-Path $env:TEMP "devbox-fonts"
+  $packageDir = Join-Path $tempRoot ($PackageId -replace '[^A-Za-z0-9._-]', '_')
+  $zipName = Split-Path $DownloadUrl -Leaf
+  $zipPath = Join-Path $packageDir $zipName
+  $extractDir = Join-Path $packageDir "expanded"
+
+  if (-not (Test-Path $packageDir)) {
+    New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+  }
+
+  Write-Host "→ Downloading font archive: $DownloadUrl" -ForegroundColor Cyan
+  Invoke-WebRequest -Uri $DownloadUrl -OutFile $zipPath
+
+  if (Test-Path $extractDir) {
+    Remove-Item -Path $extractDir -Recurse -Force
+  }
+  Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+
+  $fontFiles = Get-ChildItem -Path $extractDir -Recurse -Include *.ttf,*.otf -File |
+    Where-Object { $_.Name -notmatch 'Windows Compatible' }
+
+  if (-not $fontFiles) {
+    throw "No font files found in downloaded archive: $DownloadUrl"
+  }
+
+  $fontsFolder = (New-Object -ComObject Shell.Application).Namespace(0x14)
+  if (-not $fontsFolder) {
+    throw "Could not access the Windows Fonts shell folder."
+  }
+
+  foreach ($fontFile in $fontFiles) {
+    Write-Host "→ Installing font file: $($fontFile.Name)" -ForegroundColor Cyan
+    $fontsFolder.CopyHere($fontFile.FullName, 0x10)
+    Start-Sleep -Milliseconds 200
+  }
+
+  $matchedFace = Wait-ForFontRegistration -FontFaces $FontFaces -StatusLabel $PackageId
+  if ($matchedFace) {
+    return $matchedFace
+  }
+
+  Write-Warning "Installed font files for '$PackageId', but Windows did not register any expected font family: $($FontFaces -join ', ')."
   Write-Warning "A sign out or reboot may still be required before Windows Terminal can use the new font."
   return $null
 }
@@ -702,9 +786,13 @@ if ($Config.Fonts.Count -gt 0) {
     if (
       $Config.WindowsTerminalConfig.Configure -and
       $font -eq $Config.WindowsTerminalConfig.FontPackageId -and
-      $Config.WindowsTerminalConfig.FontFaceCandidates.Count -gt 0
+      $Config.WindowsTerminalConfig.FontFaceCandidates.Count -gt 0 -and
+      $Config.WindowsTerminalConfig.FontDownloadUrl
     ) {
-      Ensure-FontPackageRegistered -PackageId $font -FontFaces $Config.WindowsTerminalConfig.FontFaceCandidates | Out-Null
+      Install-NerdFontArchive `
+        -PackageId $font `
+        -DownloadUrl $Config.WindowsTerminalConfig.FontDownloadUrl `
+        -FontFaces $Config.WindowsTerminalConfig.FontFaceCandidates | Out-Null
       continue
     }
 
