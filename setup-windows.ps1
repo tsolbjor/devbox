@@ -7,6 +7,48 @@ $Config = @{
   InstallWindowsTerminal = $true
   InstallVSCode          = $true
   InstallRancherDesktop  = $true
+  InstallGit             = $true
+  InstallPowerToys       = $true
+
+  # Git for Windows global config (applied after Git is installed)
+  GitConfig = @{
+    Configure       = $true
+    AutoCRLF        = "true"   # Windows: convert LF→CRLF on checkout (opposite of WSL's "input")
+    DefaultBranch   = "main"
+    PullRebase      = "false"
+    AutoSetupRemote = "true"
+  }
+  Install7Zip            = $true
+
+  # Oh My Posh — prompt theme engine; configures PowerShell profiles for PS5 and PS7
+  OhMyPosh = @{
+    Configure = $true
+    Theme     = "jandedobbeleer"   # name from https://ohmyposh.dev/docs/themes
+  }
+
+  # Fonts (winget IDs)
+  Fonts = @(
+    "Microsoft.CascadiaCode",
+    "NERD-Fonts.JetBrainsMono"
+  )
+
+  # Cloud CLIs (remove any you don't need)
+  CloudCLIs = @(
+    "Microsoft.AzureCLI",
+    "Amazon.AWSCLI",
+    "Google.CloudSDK"
+  )
+
+  # Windows Terminal profile defaults (applied to all profiles via profiles.defaults)
+  WindowsTerminalConfig = @{
+    Configure   = $true
+    FontFace    = "JetBrainsMono Nerd Font"   # matches NERD-Fonts.JetBrainsMono package
+    FontSize    = 12
+    ColorScheme = "One Half Dark"             # built-in scheme, good contrast
+    CursorShape = "bar"                       # "bar", "vintage", "underscore", "filledBox", "emptyBox"
+    BellStyle   = "none"
+    HistorySize = 30000
+  }
 
   # WSL / Ubuntu
   EnsureWSL              = $true
@@ -14,17 +56,37 @@ $Config = @{
   UbuntuDistroName       = "Ubuntu"   # e.g. "Ubuntu", "Ubuntu-22.04", "Ubuntu-24.04"
   SetUbuntuAsDefaultInWindowsTerminal = $true
 
-  # WSL resource limits (writes ~/.wslconfig on Windows side)
+  # WSL resource limits (writes ~/.wslconfig on Windows side).
+  # Set memory/processors/swap to $null to auto-detect (75% of system resources;
+  # swap is disabled automatically when the allocated RAM is >= 16 GB).
   WslConfig = @{
-    memory     = "8GB"
-    processors = 4
+    memory          = $null   # e.g. "8GB", or $null to auto-detect
+    processors      = $null   # e.g. 4,   or $null to auto-detect
+    swap            = $null   # e.g. 0 (disable), "4GB", or $null to auto-detect
+    networkingMode  = "mirrored"  # "mirrored" requires Windows 11 22H2+ / WSL 2.0; use "nat" for older systems
     localhostForwarding = $true
   }
 
-  # Optional: VS Code extensions installed on Windows (not inside containers)
+  # Rancher Desktop VM + Kubernetes settings.
+  # memoryInGB / numberCPUs: $null = match WSL allocation.
+  RancherDesktopConfig = @{
+    Configure         = $true
+    memoryInGB        = $null   # $null = match WSL allocation
+    numberCPUs        = $null   # $null = match WSL allocation
+    containerEngine   = "moby"  # "moby" for Docker-compatible CLI
+    kubernetesEnabled = $true
+  }
+
+  # Windows system settings
+  EnableLongPaths        = $true   # removes 260-char path limit
+  EnableOpenSSHAgent     = $true   # allows SSH key forwarding across the WSL boundary
+  ExcludeWslFromDefender = $true   # excludes WSL vhdx from real-time scanning
+
+  # VS Code extensions installed on Windows (not inside containers)
   VSCodeExtensions = @(
     "ms-vscode-remote.remote-wsl",
-    "ms-vscode-remote.remote-containers"
+    "ms-vscode-remote.remote-containers",
+    "ms-azuretools.vscode-docker"
   )
 }
 
@@ -34,6 +96,22 @@ $Config = @{
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Get-SystemResources {
+  $cs = Get-CimInstance Win32_ComputerSystem
+  return @{
+    TotalRAMGB   = [Math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
+    LogicalCPUs  = [int]$cs.NumberOfLogicalProcessors
+  }
+}
+
+function Get-WslAllocation {
+  param($TotalRAMGB, $LogicalCPUs)
+  $memGB = [Math]::Max(2, [Math]::Floor($TotalRAMGB * 0.75))
+  $cpus  = [Math]::Max(1, [Math]::Floor($LogicalCPUs * 0.75))
+  $swap  = if ($memGB -ge 16) { 0 } else { $null }   # disable swap on high-RAM machines
+  return @{ MemoryGB = $memGB; CPUs = $cpus; Swap = $swap }
+}
 
 function Assert-Admin {
   $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -132,6 +210,8 @@ function Ensure-WSLConfigFile {
   $desired += "[wsl2]"
   if ($WslConfig.memory) { $desired += "memory=$($WslConfig.memory)" }
   if ($WslConfig.processors) { $desired += "processors=$($WslConfig.processors)" }
+  if ($null -ne $WslConfig.swap) { $desired += "swap=$($WslConfig.swap)" }
+  if ($WslConfig.networkingMode) { $desired += "networkingMode=$($WslConfig.networkingMode)" }
   if ($null -ne $WslConfig.localhostForwarding) {
     $val = if ($WslConfig.localhostForwarding) { "true" } else { "false" }
     $desired += "localhostForwarding=$val"
@@ -196,6 +276,98 @@ function Ensure-WindowsTerminalDefaultProfileUbuntu {
   Write-Host "✓ Updated Windows Terminal default profile." -ForegroundColor Green
 }
 
+function Ensure-OhMyPoshPowerShell {
+  param([Parameter(Mandatory=$true)][string]$Theme)
+
+  Install-WingetPackage -Id "JanDeDobbeleer.OhMyPosh"
+
+  $docs = [Environment]::GetFolderPath("MyDocuments")
+  $targets = @(
+    @{ Profile = Join-Path $docs "WindowsPowerShell\Microsoft.PowerShell_profile.ps1"; Shell = "powershell" }
+    @{ Profile = Join-Path $docs "PowerShell\Microsoft.PowerShell_profile.ps1";        Shell = "pwsh" }
+  )
+
+  foreach ($t in $targets) {
+    $exe = if ($t.Shell -eq "pwsh") { "pwsh" } else { "powershell" }
+    if (-not (Test-Command $exe)) { continue }
+
+    $dir = Split-Path $t.Profile
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+
+    $content = if (Test-Path $t.Profile) { Get-Content $t.Profile -Raw } else { "" }
+    if ($content -match "oh-my-posh") {
+      Write-Host "✓ oh-my-posh already in: $($t.Profile)" -ForegroundColor Green
+      continue
+    }
+
+    # Write literal $env:POSH_THEMES_PATH so it expands at shell startup, not now
+    $initLine = "oh-my-posh init $($t.Shell) --config `"`$env:POSH_THEMES_PATH\$Theme.omp.json`" | Invoke-Expression"
+    Write-Host "→ Adding oh-my-posh to: $($t.Profile)" -ForegroundColor Cyan
+    if ($content) {
+      Add-Content -Path $t.Profile -Value "`n$initLine" -Encoding UTF8
+    } else {
+      Set-Content -Path $t.Profile -Value $initLine -Encoding UTF8
+    }
+    Write-Host "✓ oh-my-posh configured in: $($t.Profile)" -ForegroundColor Green
+  }
+}
+
+function Ensure-WindowsTerminalProfileDefaults {
+  param($WtConfig)
+
+  $settingsPath = Get-WindowsTerminalSettingsPath
+  if (-not $settingsPath) {
+    Write-Warning "Windows Terminal settings.json not found. Open Windows Terminal once, then rerun."
+    return
+  }
+
+  $json = Get-Content $settingsPath -Raw | ConvertFrom-Json
+  $changed = $false
+
+  # Ensure profiles.defaults path exists
+  if ($null -eq $json.profiles) {
+    $json | Add-Member -NotePropertyName "profiles" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  if ($null -eq $json.profiles.defaults) {
+    $json.profiles | Add-Member -NotePropertyName "defaults" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  $d = $json.profiles.defaults
+
+  # Font (nested object)
+  if ($null -eq $d.font) {
+    $d | Add-Member -NotePropertyName "font" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  if ($d.font.face -ne $WtConfig.FontFace) {
+    $d.font | Add-Member -NotePropertyName "face" -NotePropertyValue $WtConfig.FontFace -Force
+    $changed = $true
+  }
+  if ($d.font.size -ne $WtConfig.FontSize) {
+    $d.font | Add-Member -NotePropertyName "size" -NotePropertyValue $WtConfig.FontSize -Force
+    $changed = $true
+  }
+
+  # Flat settings
+  foreach ($pair in @(
+    @{ Key = "colorScheme"; Val = $WtConfig.ColorScheme },
+    @{ Key = "cursorShape"; Val = $WtConfig.CursorShape },
+    @{ Key = "bellStyle";   Val = $WtConfig.BellStyle },
+    @{ Key = "historySize"; Val = $WtConfig.HistorySize }
+  )) {
+    if ($d.($pair.Key) -ne $pair.Val) {
+      $d | Add-Member -NotePropertyName $pair.Key -NotePropertyValue $pair.Val -Force
+      $changed = $true
+    }
+  }
+
+  if ($changed) {
+    Write-Host "→ Updating Windows Terminal profile defaults: $settingsPath" -ForegroundColor Cyan
+    ($json | ConvertTo-Json -Depth 50) | Set-Content -Path $settingsPath -Encoding UTF8
+    Write-Host "✓ Windows Terminal profile defaults configured." -ForegroundColor Green
+  } else {
+    Write-Host "✓ Windows Terminal profile defaults already match desired settings." -ForegroundColor Green
+  }
+}
+
 function Ensure-VSCodeExtensions {
   param([string[]]$Extensions)
 
@@ -215,6 +387,151 @@ function Ensure-VSCodeExtensions {
   }
 }
 
+function Ensure-RancherDesktopConfig {
+  param($RdConfig)
+
+  $settingsPath = Join-Path $env:APPDATA "rancher-desktop\settings.json"
+  if (-not (Test-Path $settingsPath)) {
+    Write-Warning "Rancher Desktop settings.json not found at $settingsPath. Launch Rancher Desktop once to initialise it, then rerun."
+    return
+  }
+
+  $rdRunning = Get-Process | Where-Object { $_.Name -like "*rancher*desktop*" }
+  if ($rdRunning) {
+    Write-Warning "Rancher Desktop is currently running. Close it before rerunning so settings are not overwritten by the live process."
+    return
+  }
+
+  $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+  $changed = $false
+
+  # Virtual machine resources
+  if ($null -eq $settings.virtualMachine) {
+    $settings | Add-Member -NotePropertyName "virtualMachine" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  if ($settings.virtualMachine.memoryInGB -ne $RdConfig.memoryInGB) {
+    $settings.virtualMachine.memoryInGB = $RdConfig.memoryInGB
+    $changed = $true
+  }
+  if ($settings.virtualMachine.numberCPUs -ne $RdConfig.numberCPUs) {
+    $settings.virtualMachine.numberCPUs = $RdConfig.numberCPUs
+    $changed = $true
+  }
+
+  # Container engine (moby = Docker-compatible)
+  if ($null -eq $settings.containerEngine) {
+    $settings | Add-Member -NotePropertyName "containerEngine" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  if ($settings.containerEngine.name -ne $RdConfig.containerEngine) {
+    $settings.containerEngine.name = $RdConfig.containerEngine
+    $changed = $true
+  }
+
+  # Kubernetes
+  if ($null -eq $settings.kubernetes) {
+    $settings | Add-Member -NotePropertyName "kubernetes" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  if ($settings.kubernetes.enabled -ne $RdConfig.kubernetesEnabled) {
+    $settings.kubernetes.enabled = $RdConfig.kubernetesEnabled
+    $changed = $true
+  }
+
+  if ($changed) {
+    Write-Host "→ Writing Rancher Desktop settings: $settingsPath" -ForegroundColor Cyan
+    ($settings | ConvertTo-Json -Depth 20) | Set-Content -Path $settingsPath -Encoding UTF8
+    Write-Host "✓ Rancher Desktop configured (restart Rancher Desktop to apply)." -ForegroundColor Green
+  } else {
+    Write-Host "✓ Rancher Desktop settings already match desired configuration." -ForegroundColor Green
+  }
+}
+
+function Ensure-GitSetting {
+  param(
+    [Parameter(Mandatory=$true)][string]$Key,
+    [Parameter(Mandatory=$true)][string]$Value
+  )
+  $current = git config --global --get $Key 2>$null
+  if ($current -eq $Value) {
+    Write-Host "✓ git config $Key = $Value" -ForegroundColor Green
+    return
+  }
+  Write-Host "→ Setting git config $Key = $Value" -ForegroundColor Cyan
+  git config --global $Key $Value
+}
+
+function Ensure-WindowsGitConfig {
+  param($GitConfig)
+  if (-not (Test-Command "git")) {
+    Write-Warning "git not in PATH yet — open a new terminal after installation and rerun to apply git config."
+    return
+  }
+  Ensure-GitSetting "core.autocrlf"        $GitConfig.AutoCRLF
+  Ensure-GitSetting "init.defaultBranch"   $GitConfig.DefaultBranch
+  Ensure-GitSetting "pull.rebase"          $GitConfig.PullRebase
+  Ensure-GitSetting "push.autoSetupRemote" $GitConfig.AutoSetupRemote
+}
+
+function Enable-LongPaths {
+  $key = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
+  $current = (Get-ItemProperty -Path $key -Name "LongPathsEnabled" -ErrorAction SilentlyContinue).LongPathsEnabled
+  if ($current -eq 1) {
+    Write-Host "✓ Long path support already enabled." -ForegroundColor Green
+    return
+  }
+  Write-Host "→ Enabling long path support." -ForegroundColor Cyan
+  Set-ItemProperty -Path $key -Name "LongPathsEnabled" -Value 1 -Type DWord
+  Write-Host "✓ Long path support enabled." -ForegroundColor Green
+}
+
+function Enable-OpenSSHAgent {
+  $svc = Get-Service -Name "ssh-agent" -ErrorAction SilentlyContinue
+  if (-not $svc) {
+    Write-Warning "OpenSSH Authentication Agent service not found. Enable OpenSSH Client in Settings → Optional Features, then rerun."
+    return
+  }
+  if ($svc.StartType -eq "Automatic" -and $svc.Status -eq "Running") {
+    Write-Host "✓ OpenSSH Authentication Agent already running (Automatic)." -ForegroundColor Green
+    return
+  }
+  Write-Host "→ Setting OpenSSH Authentication Agent to Automatic and starting it." -ForegroundColor Cyan
+  Set-Service -Name "ssh-agent" -StartupType Automatic
+  Start-Service -Name "ssh-agent"
+  Write-Host "✓ OpenSSH Authentication Agent enabled." -ForegroundColor Green
+}
+
+$script:currentStep = 0
+$script:totalSteps  = 0
+
+function Show-Progress {
+  param([Parameter(Mandatory=$true)][string]$Status)
+  $script:currentStep++
+  $pct = [int]($script:currentStep / $script:totalSteps * 100)
+  Write-Progress -Activity "devbox setup" -Status "[$($script:currentStep)/$($script:totalSteps)] $Status" -PercentComplete $pct
+  Write-Host "`n[$($script:currentStep)/$($script:totalSteps)] $Status" -ForegroundColor White
+}
+
+function Add-WslDefenderExclusion {
+  $packagesPath = Join-Path $env:LOCALAPPDATA "Packages"
+  $existing = (Get-MpPreference).ExclusionPath | Where-Object { $_ -like "*CanonicalGroupLimited*" }
+  if ($existing) {
+    Write-Host "✓ Windows Defender WSL exclusion already configured." -ForegroundColor Green
+    return
+  }
+  $wslDirs = Get-ChildItem -Path $packagesPath -Filter "CanonicalGroupLimited*" -Directory -ErrorAction SilentlyContinue
+  if (-not $wslDirs) {
+    Write-Warning "No WSL package directories found under $packagesPath. Run after WSL is installed."
+    return
+  }
+  foreach ($dir in $wslDirs) {
+    $localState = Join-Path $dir.FullName "LocalState"
+    if (Test-Path $localState) {
+      Write-Host "→ Adding Defender exclusion: $localState" -ForegroundColor Cyan
+      Add-MpPreference -ExclusionPath $localState
+    }
+  }
+  Write-Host "✓ WSL directories excluded from Windows Defender." -ForegroundColor Green
+}
+
 # =========================
 # RUN
 # =========================
@@ -222,23 +539,87 @@ function Ensure-VSCodeExtensions {
 Assert-Admin
 Ensure-Winget
 
+# Pre-compute total step count for progress display
+$totalSteps = 4  # always: detect resources, install apps, configure WSL, apply system settings
+if ($Config.Fonts.Count -gt 0)    { $totalSteps++ }
+if ($Config.CloudCLIs.Count -gt 0) { $totalSteps++ }
+if (($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) -or $Config.WindowsTerminalConfig.Configure) { $totalSteps++ }
+if ($Config.OhMyPosh.Configure)   { $totalSteps++ }
+if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) { $totalSteps++ }
+if ($Config.RancherDesktopConfig.Configure) { $totalSteps++ }
+$script:totalSteps = $totalSteps
+
+Show-Progress "Detecting system resources"
+$sys   = Get-SystemResources
+$alloc = Get-WslAllocation -TotalRAMGB $sys.TotalRAMGB -LogicalCPUs $sys.LogicalCPUs
+Write-Host "System: $($sys.TotalRAMGB) GB RAM, $($sys.LogicalCPUs) logical CPUs" -ForegroundColor Cyan
+$swapDisplay = if ($null -eq $alloc.Swap) { "WSL default" } else { $alloc.Swap }
+Write-Host "WSL allocation (75%): $($alloc.MemoryGB) GB RAM, $($alloc.CPUs) CPUs, swap=$swapDisplay" -ForegroundColor Cyan
+
+if (-not $Config.WslConfig.memory)     { $Config.WslConfig.memory     = "$($alloc.MemoryGB)GB" }
+if (-not $Config.WslConfig.processors) { $Config.WslConfig.processors = $alloc.CPUs }
+if ($null -eq $Config.WslConfig.swap -and $null -ne $alloc.Swap) { $Config.WslConfig.swap = $alloc.Swap }
+if (-not $Config.RancherDesktopConfig.memoryInGB) { $Config.RancherDesktopConfig.memoryInGB = $alloc.MemoryGB }
+if (-not $Config.RancherDesktopConfig.numberCPUs) { $Config.RancherDesktopConfig.numberCPUs = $alloc.CPUs }
+
+Show-Progress "Installing apps"
 if ($Config.InstallWindowsTerminal) { Install-WingetPackage -Id "Microsoft.WindowsTerminal" }
 if ($Config.InstallVSCode)          { Install-WingetPackage -Id "Microsoft.VisualStudioCode" }
 if ($Config.InstallRancherDesktop)  { Install-WingetPackage -Id "SUSE.RancherDesktop" }
+if ($Config.InstallGit) {
+  Install-WingetPackage -Id "Git.Git"
+  if ($Config.GitConfig.Configure) { Ensure-WindowsGitConfig -GitConfig $Config.GitConfig }
+}
+if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.PowerToys" }
+if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
 
+if ($Config.Fonts.Count -gt 0) {
+  Show-Progress "Installing fonts"
+  foreach ($font in $Config.Fonts) { Install-WingetPackage -Id $font }
+}
+
+if ($Config.CloudCLIs.Count -gt 0) {
+  Show-Progress "Installing cloud CLIs"
+  foreach ($cli in $Config.CloudCLIs) { Install-WingetPackage -Id $cli }
+}
+
+Show-Progress "Configuring WSL"
 if ($Config.EnsureWSL) {
   Ensure-WSL -DistroName $Config.UbuntuDistroName -DefaultVersion $Config.WslDefaultVersion
 }
-
 Ensure-WSLConfigFile -WslConfig $Config.WslConfig
 
-if ($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) {
-  Ensure-WindowsTerminalDefaultProfileUbuntu -UbuntuName $Config.UbuntuDistroName
+if (($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) -or $Config.WindowsTerminalConfig.Configure) {
+  Show-Progress "Configuring Windows Terminal"
+  if ($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) {
+    Ensure-WindowsTerminalDefaultProfileUbuntu -UbuntuName $Config.UbuntuDistroName
+  }
+  if ($Config.WindowsTerminalConfig.Configure) {
+    Ensure-WindowsTerminalProfileDefaults -WtConfig $Config.WindowsTerminalConfig
+  }
+}
+
+if ($Config.OhMyPosh.Configure) {
+  Show-Progress "Configuring Oh My Posh"
+  Ensure-OhMyPoshPowerShell -Theme $Config.OhMyPosh.Theme
 }
 
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {
+  Show-Progress "Installing VS Code extensions"
   Ensure-VSCodeExtensions -Extensions $Config.VSCodeExtensions
 }
 
+if ($Config.RancherDesktopConfig.Configure) {
+  Show-Progress "Configuring Rancher Desktop"
+  Ensure-RancherDesktopConfig -RdConfig $Config.RancherDesktopConfig
+}
+
+Show-Progress "Applying system settings"
+if ($Config.EnableLongPaths)        { Enable-LongPaths }
+if ($Config.EnableOpenSSHAgent)     { Enable-OpenSSHAgent }
+if ($Config.ExcludeWslFromDefender) { Add-WslDefenderExclusion }
+
+Write-Progress -Activity "devbox setup" -Completed
 Write-Host "`nDone." -ForegroundColor Green
 Write-Host "Tip: Apply WSL resource changes with: wsl --shutdown" -ForegroundColor Cyan
+Write-Host "Tip: Restart Rancher Desktop to apply VM resource changes." -ForegroundColor Cyan
