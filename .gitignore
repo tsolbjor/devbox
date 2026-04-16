@@ -4,6 +4,7 @@
 
 # Editor artifacts
 .vscode/settings.json
+.codex
 *.bak
 *.orig
 *~
