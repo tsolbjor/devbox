@@ -44,7 +44,7 @@ $Config = @{
     Configure          = $true
     FontPackageId      = "NERD-Fonts.JetBrainsMono"
     FontDownloadUrl    = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.zip"
-    FontArchiveFilter  = "*Mono*.ttf"
+    FontArchiveFilter  = "*NerdFontMono-*.ttf"
     FontFace           = "JetBrainsMono Nerd Font Mono"
     FontFaceCandidates = @(
       "JetBrainsMono Nerd Font Mono",
