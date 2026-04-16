@@ -44,7 +44,7 @@ $Config = @{
     Configure          = $true
     FontPackageId      = "NERD-Fonts.JetBrainsMono"
     FontDownloadUrl    = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.zip"
-    FontArchiveFilter  = "*NerdFontMono-*.ttf"
+    FontArchiveFilter  = "JetBrainsMonoNerdFontMono-*.ttf"
     FontFace           = "JetBrainsMono Nerd Font Mono"
     FontFaceCandidates = @(
       "JetBrainsMono Nerd Font Mono",
@@ -329,11 +329,11 @@ function Install-NerdFontArchive {
     throw "Could not access the Windows Fonts shell folder."
   }
 
+  Write-Host "→ Installing $($fontFiles.Count) font files matching '$ArchiveFilter'" -ForegroundColor Cyan
   foreach ($fontFile in $fontFiles) {
-    Write-Host "→ Installing font file: $($fontFile.Name)" -ForegroundColor Cyan
     $fontsFolder.CopyHere($fontFile.FullName, 0x10)
-    Start-Sleep -Milliseconds 200
   }
+  Start-Sleep -Seconds 2
 
   $matchedFace = Wait-ForFontRegistration -FontFaces $FontFaces -StatusLabel $PackageId
   if ($matchedFace) {
