@@ -357,7 +357,9 @@ function Ensure-WindowsTerminalProfileDefaults {
     @{ Key = "bellStyle";   Val = $WtConfig.BellStyle },
     @{ Key = "historySize"; Val = $WtConfig.HistorySize }
   )) {
-    if ($d.($pair.Key) -ne $pair.Val) {
+    $currentProp = $d.PSObject.Properties[$pair.Key]
+    $currentVal = if ($null -ne $currentProp) { $currentProp.Value } else { $null }
+    if ($currentVal -ne $pair.Val) {
       $d | Add-Member -NotePropertyName $pair.Key -NotePropertyValue $pair.Val -Force
       $changed = $true
     }
