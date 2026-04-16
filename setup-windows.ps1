@@ -41,13 +41,19 @@ $Config = @{
 
   # Windows Terminal profile defaults (applied to all profiles via profiles.defaults)
   WindowsTerminalConfig = @{
-    Configure   = $true
-    FontFace    = "JetBrainsMono Nerd Font"   # matches NERD-Fonts.JetBrainsMono package
-    FontSize    = 12
-    ColorScheme = "One Half Dark"             # built-in scheme, good contrast
-    CursorShape = "bar"                       # "bar", "vintage", "underscore", "filledBox", "emptyBox"
-    BellStyle   = "none"
-    HistorySize = 30000
+    Configure          = $true
+    FontPackageId      = "NERD-Fonts.JetBrainsMono"
+    FontFace           = "JetBrainsMono Nerd Font"
+    FontFaceCandidates = @(
+      "JetBrainsMono Nerd Font",
+      "JetBrainsMono NFM",
+      "JetBrainsMono NF"
+    )
+    FontSize           = 12
+    ColorScheme        = "One Half Dark"      # built-in scheme, good contrast
+    CursorShape        = "bar"                # "bar", "vintage", "underscore", "filledBox", "emptyBox"
+    BellStyle          = "none"
+    HistorySize        = 30000
   }
 
   # WSL / Ubuntu
@@ -143,6 +149,78 @@ function Install-WingetPackage {
 
   Write-Host "→ Installing: $Id" -ForegroundColor Cyan
   winget install --id $Id -e --silent --accept-package-agreements --accept-source-agreements
+}
+
+function Get-InstalledFontFamilies {
+  try {
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    return (New-Object System.Drawing.Text.InstalledFontCollection).Families |
+      ForEach-Object { $_.Name }
+  } catch {
+    Write-Warning "Could not enumerate installed fonts via System.Drawing. Falling back to configured font name."
+    return @()
+  }
+}
+
+function Resolve-WindowsTerminalFontFace {
+  param(
+    [Parameter(Mandatory=$true)][string]$PreferredFontFace
+  )
+
+  $installedFonts = Get-InstalledFontFamilies
+  if ($installedFonts.Count -eq 0) {
+    return $PreferredFontFace
+  }
+
+  $candidates = @(
+    $PreferredFontFace,
+    "JetBrainsMono NFM",
+    "JetBrainsMono NF",
+    "CaskaydiaCove Nerd Font",
+    "CaskaydiaMono Nerd Font",
+    "Cascadia Code"
+  ) | Select-Object -Unique
+
+  foreach ($candidate in $candidates) {
+    if ($installedFonts -contains $candidate) {
+      if ($candidate -ne $PreferredFontFace) {
+        Write-Warning "Windows Terminal font '$PreferredFontFace' is not installed. Using '$candidate' instead."
+      }
+      return $candidate
+    }
+  }
+
+  Write-Warning "None of the preferred Terminal fonts were found. Leaving font face as '$PreferredFontFace'."
+  return $PreferredFontFace
+}
+
+function Ensure-FontPackageRegistered {
+  param(
+    [Parameter(Mandatory=$true)][string]$PackageId,
+    [Parameter(Mandatory=$true)][string[]]$FontFaces,
+    [int]$MaxAttempts = 5,
+    [int]$RetryDelaySeconds = 2
+  )
+
+  Install-WingetPackage -Id $PackageId
+
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    $installedFonts = Get-InstalledFontFamilies
+    $matchedFace = $FontFaces | Where-Object { $installedFonts -contains $_ } | Select-Object -First 1
+    if ($matchedFace) {
+      Write-Host "✓ Font registered: $matchedFace" -ForegroundColor Green
+      return $matchedFace
+    }
+
+    if ($attempt -lt $MaxAttempts) {
+      Write-Host "→ Waiting for font registration: $PackageId (attempt $attempt/$MaxAttempts)" -ForegroundColor Cyan
+      Start-Sleep -Seconds $RetryDelaySeconds
+    }
+  }
+
+  Write-Warning "Installed '$PackageId', but Windows did not register any expected font family: $($FontFaces -join ', ')."
+  Write-Warning "A sign out or reboot may still be required before Windows Terminal can use the new font."
+  return $null
 }
 
 function Ensure-WindowsOptionalFeatureEnabled {
@@ -323,6 +401,7 @@ function Ensure-WindowsTerminalProfileDefaults {
 
   $json = Get-Content $settingsPath -Raw | ConvertFrom-Json
   $changed = $false
+  $resolvedFontFace = Resolve-WindowsTerminalFontFace -PreferredFontFace $WtConfig.FontFace
 
   # Ensure profiles.defaults path exists
   if ($null -eq $json.profiles) {
@@ -339,8 +418,8 @@ function Ensure-WindowsTerminalProfileDefaults {
   }
   $currentFontFaceProp = $d.font.PSObject.Properties["face"]
   $currentFontFace = if ($null -ne $currentFontFaceProp) { $currentFontFaceProp.Value } else { $null }
-  if ($currentFontFace -ne $WtConfig.FontFace) {
-    $d.font | Add-Member -NotePropertyName "face" -NotePropertyValue $WtConfig.FontFace -Force
+  if ($currentFontFace -ne $resolvedFontFace) {
+    $d.font | Add-Member -NotePropertyName "face" -NotePropertyValue $resolvedFontFace -Force
     $changed = $true
   }
   $currentFontSizeProp = $d.font.PSObject.Properties["size"]
@@ -581,7 +660,18 @@ if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
 
 if ($Config.Fonts.Count -gt 0) {
   Show-Progress "Installing fonts"
-  foreach ($font in $Config.Fonts) { Install-WingetPackage -Id $font }
+  foreach ($font in $Config.Fonts) {
+    if (
+      $Config.WindowsTerminalConfig.Configure -and
+      $font -eq $Config.WindowsTerminalConfig.FontPackageId -and
+      $Config.WindowsTerminalConfig.FontFaceCandidates.Count -gt 0
+    ) {
+      Ensure-FontPackageRegistered -PackageId $font -FontFaces $Config.WindowsTerminalConfig.FontFaceCandidates | Out-Null
+      continue
+    }
+
+    Install-WingetPackage -Id $font
+  }
 }
 
 if ($Config.CloudCLIs.Count -gt 0) {
