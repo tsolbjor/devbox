@@ -334,14 +334,18 @@ function Ensure-WindowsTerminalProfileDefaults {
   $d = $json.profiles.defaults
 
   # Font (nested object)
-  if ($null -eq $d.font) {
+  if ($null -eq $d.font -or $d.font -isnot [psobject]) {
     $d | Add-Member -NotePropertyName "font" -NotePropertyValue ([PSCustomObject]@{}) -Force
   }
-  if ($d.font.face -ne $WtConfig.FontFace) {
+  $currentFontFaceProp = $d.font.PSObject.Properties["face"]
+  $currentFontFace = if ($null -ne $currentFontFaceProp) { $currentFontFaceProp.Value } else { $null }
+  if ($currentFontFace -ne $WtConfig.FontFace) {
     $d.font | Add-Member -NotePropertyName "face" -NotePropertyValue $WtConfig.FontFace -Force
     $changed = $true
   }
-  if ($d.font.size -ne $WtConfig.FontSize) {
+  $currentFontSizeProp = $d.font.PSObject.Properties["size"]
+  $currentFontSize = if ($null -ne $currentFontSizeProp) { $currentFontSizeProp.Value } else { $null }
+  if ($currentFontSize -ne $WtConfig.FontSize) {
     $d.font | Add-Member -NotePropertyName "size" -NotePropertyValue $WtConfig.FontSize -Force
     $changed = $true
   }
