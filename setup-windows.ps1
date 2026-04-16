@@ -46,7 +46,10 @@ $Config = @{
     FontFace           = "JetBrainsMono Nerd Font"
     FontFaceCandidates = @(
       "JetBrainsMono Nerd Font",
+      "JetBrainsMono Nerd Font Mono",
+      "JetBrainsMono Nerd Font Propo",
       "JetBrainsMono NFM",
+      "JetBrainsMono NFP",
       "JetBrainsMono NF"
     )
     FontSize           = 12
@@ -152,14 +155,43 @@ function Install-WingetPackage {
 }
 
 function Get-InstalledFontFamilies {
+  $fontFamilies = [System.Collections.Generic.List[string]]::new()
+
   try {
     Add-Type -AssemblyName System.Drawing -ErrorAction Stop
-    return (New-Object System.Drawing.Text.InstalledFontCollection).Families |
-      ForEach-Object { $_.Name }
+    foreach ($family in (New-Object System.Drawing.Text.InstalledFontCollection).Families) {
+      if ($family.Name) {
+        [void]$fontFamilies.Add($family.Name)
+      }
+    }
   } catch {
-    Write-Warning "Could not enumerate installed fonts via System.Drawing. Falling back to configured font name."
-    return @()
+    Write-Warning "Could not enumerate installed fonts via System.Drawing. Falling back to the Windows font registry."
   }
+
+  foreach ($fontKeyPath in @(
+    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts",
+    "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+  )) {
+    if (-not (Test-Path $fontKeyPath)) { continue }
+
+    try {
+      $fontKey = Get-ItemProperty -Path $fontKeyPath
+      foreach ($prop in $fontKey.PSObject.Properties) {
+        if ($prop.Name -in @("PSPath", "PSParentPath", "PSChildName", "PSDrive", "PSProvider")) {
+          continue
+        }
+
+        $familyName = ($prop.Name -replace '\s*\(.+\)$', '').Trim()
+        if ($familyName) {
+          [void]$fontFamilies.Add($familyName)
+        }
+      }
+    } catch {
+      Write-Warning "Could not read registered fonts from $fontKeyPath."
+    }
+  }
+
+  return $fontFamilies | Select-Object -Unique
 }
 
 function Resolve-WindowsTerminalFontFace {
@@ -174,7 +206,10 @@ function Resolve-WindowsTerminalFontFace {
 
   $candidates = @(
     $PreferredFontFace,
+    "JetBrainsMono Nerd Font Mono",
+    "JetBrainsMono Nerd Font Propo",
     "JetBrainsMono NFM",
+    "JetBrainsMono NFP",
     "JetBrainsMono NF",
     "CaskaydiaCove Nerd Font",
     "CaskaydiaMono Nerd Font",
