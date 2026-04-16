@@ -301,6 +301,7 @@ function Install-NerdFontArchive {
   $zipName = Split-Path $DownloadUrl -Leaf
   $zipPath = Join-Path $packageDir $zipName
   $extractDir = Join-Path $packageDir "expanded"
+  $installDir = Join-Path $packageDir "install"
 
   if (-not (Test-Path $packageDir)) {
     New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
@@ -311,6 +312,9 @@ function Install-NerdFontArchive {
 
   if (Test-Path $extractDir) {
     Remove-Item -Path $extractDir -Recurse -Force
+  }
+  if (Test-Path $installDir) {
+    Remove-Item -Path $installDir -Recurse -Force
   }
   Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 
@@ -324,15 +328,22 @@ function Install-NerdFontArchive {
     throw "No font files matching '$ArchiveFilter' found in downloaded archive: $DownloadUrl"
   }
 
+  New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+  foreach ($fontFile in $fontFiles) {
+    Copy-Item -Path $fontFile.FullName -Destination (Join-Path $installDir $fontFile.Name) -Force
+  }
+
   $fontsFolder = (New-Object -ComObject Shell.Application).Namespace(0x14)
   if (-not $fontsFolder) {
     throw "Could not access the Windows Fonts shell folder."
   }
+  $installFolder = (New-Object -ComObject Shell.Application).Namespace($installDir)
+  if (-not $installFolder) {
+    throw "Could not access the staged font folder: $installDir"
+  }
 
   Write-Host "→ Installing $($fontFiles.Count) font files matching '$ArchiveFilter'" -ForegroundColor Cyan
-  foreach ($fontFile in $fontFiles) {
-    $fontsFolder.CopyHere($fontFile.FullName, 0x10)
-  }
+  $fontsFolder.CopyHere($installFolder.Items(), 0x10)
   Start-Sleep -Seconds 2
 
   $matchedFace = Wait-ForFontRegistration -FontFaces $FontFaces -StatusLabel $PackageId
