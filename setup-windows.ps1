@@ -19,6 +19,7 @@ $Config = @{
     AutoSetupRemote = "true"
   }
   Install7Zip            = $true
+  InstallNode            = $true   # OpenJS.NodeJS.LTS + ncu global
 
   # Oh My Posh — prompt theme engine; configures PowerShell profiles for PS5 and PS7
   OhMyPosh = @{
@@ -666,6 +667,27 @@ function Ensure-RancherDesktopConfig {
   }
 }
 
+function Ensure-NodeAndNcu {
+  Install-WingetPackage -Id "OpenJS.NodeJS.LTS"
+
+  # Refresh PATH so npm is available in this session after a fresh install
+  $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+              [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+  if (-not (Test-Command "npm")) {
+    Write-Warning "npm not found in PATH after Node.js install. Open a new terminal and run: npm install -g npm-check-updates"
+    return
+  }
+
+  if (Test-Command "ncu") {
+    Write-Host "✓ ncu already installed" -ForegroundColor Green
+  } else {
+    Write-Host "→ Installing ncu (npm-check-updates)" -ForegroundColor Cyan
+    npm install -g npm-check-updates
+    Write-Host "✓ ncu installed" -ForegroundColor Green
+  }
+}
+
 function Ensure-GitSetting {
   param(
     [Parameter(Mandatory=$true)][string]$Key,
@@ -793,6 +815,7 @@ if ($Config.InstallGit) {
 }
 if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.PowerToys" }
 if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
+if ($Config.InstallNode)            { Ensure-NodeAndNcu }
 
 if ($Config.Fonts.Count -gt 0) {
   Show-Progress "Installing fonts"

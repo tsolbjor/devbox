@@ -38,6 +38,8 @@ INSTALL_K9S="${INSTALL_K9S:-true}"
 INSTALL_KUBECTX="${INSTALL_KUBECTX:-true}"
 INSTALL_OH_MY_POSH="${INSTALL_OH_MY_POSH:-true}"
 OH_MY_POSH_THEME="${OH_MY_POSH_THEME:-jandedobbeleer}"   # name from https://ohmyposh.dev/docs/themes
+INSTALL_NODE="${INSTALL_NODE:-true}"
+NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"   # LTS; https://nodejs.org/en/about/previous-releases
 CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-true}"   # set false on native Linux (not WSL)
 WSL_ENABLE_SYSTEMD="${WSL_ENABLE_SYSTEMD:-true}"   # requires Windows 11 22H2+ / WSL 2.0
 SET_ZSH_DEFAULT="${SET_ZSH_DEFAULT:-true}"
@@ -232,6 +234,34 @@ ensure_kubectx() {
   echo "✓ kubectx/kubens ${version} installed"
 }
 
+ensure_node() {
+  if ensure_command node; then
+    echo "✓ node already installed ($(node --version))"
+  else
+    echo "→ Installing Node.js ${NODE_MAJOR_VERSION}.x (NodeSource)"
+    if [[ ! -f /etc/apt/keyrings/nodesource.gpg ]]; then
+      sudo mkdir -p /etc/apt/keyrings
+      curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+    fi
+    if [[ ! -f /etc/apt/sources.list.d/nodesource.list ]]; then
+      echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR_VERSION}.x nodistro main" \
+        | sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
+      sudo apt-get update -y
+    fi
+    sudo apt-get install -y nodejs
+    echo "✓ node installed ($(node --version))"
+  fi
+
+  if ensure_command ncu; then
+    echo "✓ ncu already installed"
+  else
+    echo "→ Installing ncu (npm-check-updates)"
+    sudo npm install -g npm-check-updates
+    echo "✓ ncu installed"
+  fi
+}
+
 ensure_oh_my_posh() {
   # Install binary
   if ensure_command oh-my-posh; then
@@ -304,6 +334,7 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
 [[ "$INSTALL_K9S"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_KUBECTX"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_OH_MY_POSH" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_NODE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$ENSURE_SSH_KEY"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 
 log "Updating apt metadata"
@@ -419,6 +450,11 @@ fi
 if [[ "$INSTALL_OH_MY_POSH" == "true" ]]; then
   log "Installing oh-my-posh"
   ensure_oh_my_posh
+fi
+
+if [[ "$INSTALL_NODE" == "true" ]]; then
+  log "Installing Node.js and ncu"
+  ensure_node
 fi
 
 if [[ "$ENSURE_SSH_KEY" == "true" ]]; then
