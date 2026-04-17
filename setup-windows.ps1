@@ -58,6 +58,10 @@ $Config = @{
     CursorShape        = "bar"                # "bar", "vintage", "underscore", "filledBox", "emptyBox"
     BellStyle          = "none"
     HistorySize        = 30000
+    # Tab contrast: active tab matches terminal bg; inactive tabs and tab row are darker
+    ThemeName          = "devbox"
+    ThemeTabActive     = "#282C34"   # One Half Dark background — selected tab appears open
+    ThemeTabInactive   = "#1A1D23"   # ~35% darker — inactive tabs and tab row recede
   }
 
   # WSL / Ubuntu
@@ -590,6 +594,87 @@ function Ensure-WindowsTerminalProfileDefaults {
   }
 }
 
+function Ensure-WindowsTerminalTheme {
+  param($WtConfig)
+
+  $settingsPath = Get-WindowsTerminalSettingsPath
+  if (-not $settingsPath) {
+    Write-Warning "Windows Terminal settings.json not found. Open Windows Terminal once, then rerun."
+    return
+  }
+
+  $json = Get-Content $settingsPath -Raw | ConvertFrom-Json
+  $changed = $false
+
+  # Ensure top-level themes array exists
+  if ($null -eq $json.PSObject.Properties["themes"]) {
+    $json | Add-Member -NotePropertyName "themes" -NotePropertyValue @() -Force
+  }
+
+  # Find or create our named theme entry
+  $theme = @($json.themes) | Where-Object { $_.name -eq $WtConfig.ThemeName } | Select-Object -First 1
+  if ($null -eq $theme) {
+    $theme = [PSCustomObject]@{ name = $WtConfig.ThemeName }
+    $json.themes = @($json.themes) + @($theme)
+    $changed = $true
+  }
+
+  # tab: active tab bg, inactive tab bg
+  if ($null -eq $theme.PSObject.Properties["tab"]) {
+    $theme | Add-Member -NotePropertyName "tab" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  foreach ($pair in @(
+    @{ Key = "background";          Val = $WtConfig.ThemeTabActive },
+    @{ Key = "unfocusedBackground"; Val = $WtConfig.ThemeTabInactive }
+  )) {
+    $p = $theme.tab.PSObject.Properties[$pair.Key]
+    if ($null -eq $p -or $p.Value -ne $pair.Val) {
+      $theme.tab | Add-Member -NotePropertyName $pair.Key -NotePropertyValue $pair.Val -Force
+      $changed = $true
+    }
+  }
+
+  # tabRow: background behind all tabs
+  if ($null -eq $theme.PSObject.Properties["tabRow"]) {
+    $theme | Add-Member -NotePropertyName "tabRow" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  foreach ($pair in @(
+    @{ Key = "background";          Val = $WtConfig.ThemeTabInactive },
+    @{ Key = "unfocusedBackground"; Val = $WtConfig.ThemeTabInactive }
+  )) {
+    $p = $theme.tabRow.PSObject.Properties[$pair.Key]
+    if ($null -eq $p -or $p.Value -ne $pair.Val) {
+      $theme.tabRow | Add-Member -NotePropertyName $pair.Key -NotePropertyValue $pair.Val -Force
+      $changed = $true
+    }
+  }
+
+  # window: lock to dark application theme
+  if ($null -eq $theme.PSObject.Properties["window"]) {
+    $theme | Add-Member -NotePropertyName "window" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  $p = $theme.window.PSObject.Properties["applicationTheme"]
+  if ($null -eq $p -or $p.Value -ne "dark") {
+    $theme.window | Add-Member -NotePropertyName "applicationTheme" -NotePropertyValue "dark" -Force
+    $changed = $true
+  }
+
+  # Activate the theme at the top level
+  $p = $json.PSObject.Properties["theme"]
+  if ($null -eq $p -or $p.Value -ne $WtConfig.ThemeName) {
+    $json | Add-Member -NotePropertyName "theme" -NotePropertyValue $WtConfig.ThemeName -Force
+    $changed = $true
+  }
+
+  if ($changed) {
+    Write-Host "→ Applying Windows Terminal theme '$($WtConfig.ThemeName)': $settingsPath" -ForegroundColor Cyan
+    ($json | ConvertTo-Json -Depth 50) | Set-Content -Path $settingsPath -Encoding UTF8
+    Write-Host "✓ Tab contrast configured (active: $($WtConfig.ThemeTabActive), inactive: $($WtConfig.ThemeTabInactive))" -ForegroundColor Green
+  } else {
+    Write-Host "✓ Windows Terminal theme '$($WtConfig.ThemeName)' already matches desired settings" -ForegroundColor Green
+  }
+}
+
 function Ensure-VSCodeExtensions {
   param([string[]]$Extensions)
 
@@ -856,6 +941,7 @@ if (($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerm
   }
   if ($Config.WindowsTerminalConfig.Configure) {
     Ensure-WindowsTerminalProfileDefaults -WtConfig $Config.WindowsTerminalConfig
+    Ensure-WindowsTerminalTheme -WtConfig $Config.WindowsTerminalConfig
   }
 }
 
