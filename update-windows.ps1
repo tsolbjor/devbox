@@ -3,8 +3,13 @@
 # =========================
 
 $Config = @{
-  WingetUpgradeAll = $true   # winget upgrade --all
-  UpdateNpmGlobals = $true   # ncu -g if npm and ncu are available
+  UpdateWindowsOS    = $true   # PSWindowsUpdate — installs OS updates, no auto-reboot
+  UpdateDefender     = $true   # Update-MpSignature — Windows Defender definitions
+  UpdateStoreApps    = $true   # trigger Microsoft Store "update all" (runs in background)
+  UpdateWSL          = $true   # wsl --update — WSL kernel/runtime
+  UpdatePSModules    = $true   # Update-Module — all installed PowerShell modules
+  WingetUpgradeAll   = $true   # winget upgrade --all
+  UpdateNpmGlobals   = $true   # ncu -g if npm and ncu are available
 }
 
 # =========================
@@ -24,6 +29,52 @@ function Assert-Admin {
 
 function Test-Command($Name) {
   return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Update-WindowsOS {
+  if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
+    Write-Host "→ Installing PSWindowsUpdate module" -ForegroundColor Cyan
+    Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser
+  }
+  Import-Module PSWindowsUpdate
+  Write-Host "→ Installing Windows Updates" -ForegroundColor Cyan
+  $results = Install-WindowsUpdate -AcceptAll -AutoReboot:$false -IgnoreReboot
+  if ($results) {
+    $needsReboot = $results | Where-Object { $_.RebootRequired }
+    if ($needsReboot) {
+      Write-Host "⚠ Updates installed — reboot required to finish." -ForegroundColor Yellow
+    } else {
+      Write-Host "✓ Windows Updates installed" -ForegroundColor Green
+    }
+  } else {
+    Write-Host "✓ Windows is up to date" -ForegroundColor Green
+  }
+}
+
+function Update-Defender {
+  Write-Host "→ Updating Windows Defender definitions" -ForegroundColor Cyan
+  Update-MpSignature
+  Write-Host "✓ Defender definitions up to date" -ForegroundColor Green
+}
+
+function Update-WSL {
+  Write-Host "→ Updating WSL" -ForegroundColor Cyan
+  wsl --update
+  Write-Host "✓ WSL up to date" -ForegroundColor Green
+}
+
+function Update-PSModules {
+  Write-Host "→ Updating PowerShell modules" -ForegroundColor Cyan
+  Update-Module -Force
+  Write-Host "✓ PowerShell modules up to date" -ForegroundColor Green
+}
+
+function Update-StoreApps {
+  Write-Host "→ Triggering Microsoft Store update scan" -ForegroundColor Cyan
+  $obj = Get-CimInstance -Namespace "root\cimv2\mdm\dmmap" `
+    -ClassName "MDM_EnterpriseModernAppManagement_AppManagement01"
+  Invoke-CimMethod -InputObject $obj -MethodName UpdateScanMethod | Out-Null
+  Write-Host "✓ Store update scan triggered (updates install in background)" -ForegroundColor Green
 }
 
 function Ensure-Winget {
@@ -67,9 +118,39 @@ Assert-Admin
 Ensure-Winget
 
 $totalSteps = 1  # always: Done
+if ($Config.UpdateWindowsOS)  { $totalSteps++ }
+if ($Config.UpdateDefender)   { $totalSteps++ }
+if ($Config.UpdateStoreApps)  { $totalSteps++ }
+if ($Config.UpdateWSL)        { $totalSteps++ }
+if ($Config.UpdatePSModules)  { $totalSteps++ }
 if ($Config.WingetUpgradeAll) { $totalSteps++ }
 if ($Config.UpdateNpmGlobals) { $totalSteps++ }
 $script:totalSteps = $totalSteps
+
+if ($Config.UpdateWindowsOS) {
+  Show-Progress "Installing Windows Updates"
+  Update-WindowsOS
+}
+
+if ($Config.UpdateDefender) {
+  Show-Progress "Updating Defender definitions"
+  Update-Defender
+}
+
+if ($Config.UpdateStoreApps) {
+  Show-Progress "Triggering Microsoft Store updates"
+  Update-StoreApps
+}
+
+if ($Config.UpdateWSL) {
+  Show-Progress "Updating WSL"
+  Update-WSL
+}
+
+if ($Config.UpdatePSModules) {
+  Show-Progress "Updating PowerShell modules"
+  Update-PSModules
+}
 
 if ($Config.WingetUpgradeAll) {
   Show-Progress "Upgrading all winget packages"
