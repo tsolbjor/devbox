@@ -11,14 +11,16 @@ $Config = @{
 # IMPLEMENTATION
 # =========================
 
-# Self-elevate: relaunch as Administrator if not already elevated
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-  Start-Process pwsh -Verb RunAs -ArgumentList "-NoExit", "-File", $PSCommandPath
-  exit
-}
-
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Assert-Admin {
+  $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  if (-not $isAdmin) {
+    throw "Please run this script as Administrator."
+  }
+}
 
 function Test-Command($Name) {
   return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
@@ -61,6 +63,7 @@ function Show-Progress {
 # RUN
 # =========================
 
+Assert-Admin
 Ensure-Winget
 
 $totalSteps = 1  # always: Done
