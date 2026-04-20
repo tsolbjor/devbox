@@ -11,6 +11,12 @@ $Config = @{
 # IMPLEMENTATION
 # =========================
 
+# Self-elevate: relaunch as Administrator if not already elevated
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  Start-Process pwsh -Verb RunAs -ArgumentList "-NoExit", "-File", $PSCommandPath
+  exit
+}
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
