@@ -7,7 +7,7 @@ $Config = @{
   UpdateDefender     = $true   # Update-MpSignature — Windows Defender definitions
   UpdateStoreApps    = $true   # trigger Microsoft Store "update all" (runs in background)
   UpdateWSL          = $true   # wsl --update — WSL kernel/runtime
-  UpdatePSModules    = $true   # Update-Module — all installed PowerShell modules
+  UpdatePSModules    = $false  # Update-Module — all installed PowerShell modules (slow, low payoff)
   WingetUpgradeAll   = $true   # winget upgrade --all
   UpdateNpmGlobals   = $true   # ncu -g if npm and ncu are available
 }
