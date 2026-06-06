@@ -15,8 +15,46 @@ UPDATE_NPM_GLOBALS="${UPDATE_NPM_GLOBALS:-true}"   # runs ncu -g if ncu is avail
 # IMPLEMENTATION
 # =========================
 
+usage() {
+  cat <<'EOF'
+Usage: update-ubuntu.sh [options]
+
+  --skip-apt           Skip apt update/upgrade
+  --skip-oh-my-posh    Skip oh-my-posh update
+  --skip-k9s           Skip k9s update
+  --skip-kubectx       Skip kubectx/kubens update
+  --skip-npm-globals   Skip global npm package update
+  -h, --help           Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-apt)          UPDATE_APT=false ;;
+    --skip-oh-my-posh)   UPDATE_OH_MY_POSH=false ;;
+    --skip-k9s)          UPDATE_K9S=false ;;
+    --skip-kubectx)      UPDATE_KUBECTX=false ;;
+    --skip-npm-globals)  UPDATE_NPM_GLOBALS=false ;;
+    -h|--help)           usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+  esac
+  shift
+done
+
 CURRENT_STEP=0
 TOTAL_STEPS=0
+
+# Run a step; on failure, report and suggest the matching --skip flag.
+# set -e is suppressed inside a function called as an `if` condition, so a
+# failing command returns non-zero here instead of aborting the script.
+run_step() {
+  local label="$1" skip_flag="$2" fn="$3"
+  log "$label"
+  if ! "$fn"; then
+    echo "⚠ '$label' failed. Re-run with $skip_flag to skip this step."
+    exit 1
+  fi
+}
 
 log() {
   CURRENT_STEP=$(( CURRENT_STEP + 1 ))
@@ -36,7 +74,10 @@ update_apt() {
   echo "→ Updating package lists"
   sudo apt-get update -y
   echo "→ Upgrading packages"
-  sudo apt-get upgrade -y
+  # --allow-downgrades: pinned third-party repos (e.g. Mozilla, priority 1000)
+  # can require replacing an Ubuntu snap-transition deb whose epoch makes it
+  # rank as "newer"; without this, apt aborts non-zero and set -e kills the run.
+  sudo apt-get upgrade -y --allow-downgrades
   sudo apt-get autoremove -y
   echo "✓ apt packages up to date"
 }
@@ -125,29 +166,10 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_KUBECTX"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_NPM_GLOBALS"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 
-if [[ "$UPDATE_APT" == "true" ]]; then
-  log "Updating apt packages"
-  update_apt
-fi
-
-if [[ "$UPDATE_OH_MY_POSH" == "true" ]]; then
-  log "Updating oh-my-posh"
-  update_oh_my_posh
-fi
-
-if [[ "$UPDATE_K9S" == "true" ]]; then
-  log "Updating k9s"
-  update_k9s
-fi
-
-if [[ "$UPDATE_KUBECTX" == "true" ]]; then
-  log "Updating kubectx/kubens"
-  update_kubectx
-fi
-
-if [[ "$UPDATE_NPM_GLOBALS" == "true" ]]; then
-  log "Updating global npm packages"
-  update_npm_globals
-fi
+[[ "$UPDATE_APT"         == "true" ]] && run_step "Updating apt packages"      --skip-apt          update_apt
+[[ "$UPDATE_OH_MY_POSH"  == "true" ]] && run_step "Updating oh-my-posh"        --skip-oh-my-posh   update_oh_my_posh
+[[ "$UPDATE_K9S"         == "true" ]] && run_step "Updating k9s"               --skip-k9s          update_k9s
+[[ "$UPDATE_KUBECTX"     == "true" ]] && run_step "Updating kubectx/kubens"    --skip-kubectx      update_kubectx
+[[ "$UPDATE_NPM_GLOBALS" == "true" ]] && run_step "Updating global npm packages" --skip-npm-globals update_npm_globals
 
 log "Done."
