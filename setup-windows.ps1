@@ -19,7 +19,8 @@ $Config = @{
     AutoSetupRemote = "true"
   }
   Install7Zip            = $true
-  InstallNode            = $false  # Node lives in WSL (setup-ubuntu.sh); host rarely needs it
+  InstallNode            = $true   # host Node for npm-global tooling (CDK, etc.)
+  InstallAzureFunctionsCoreTools = $true   # `func` CLI via winget (self-updates on `winget upgrade`)
 
   # Oh My Posh — prompt theme engine; configures PowerShell profiles for PS5 and PS7
   OhMyPosh = @{
@@ -934,6 +935,7 @@ if ($Config.InstallGit) {
 if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.PowerToys" }
 if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
 if ($Config.InstallNode)            { Ensure-NodeAndNcu }
+if ($Config.InstallAzureFunctionsCoreTools) { Install-WingetPackage -Id "Microsoft.Azure.FunctionsCoreTools" }
 
 if ($Config.Fonts.Count -gt 0) {
   Show-Progress "Installing fonts"

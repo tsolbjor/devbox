@@ -9,7 +9,8 @@ UPDATE_APT="${UPDATE_APT:-true}"
 UPDATE_OH_MY_POSH="${UPDATE_OH_MY_POSH:-true}"
 UPDATE_K9S="${UPDATE_K9S:-true}"
 UPDATE_KUBECTX="${UPDATE_KUBECTX:-true}"
-UPDATE_NPM_GLOBALS="${UPDATE_NPM_GLOBALS:-true}"   # runs ncu -g if ncu is available
+UPDATE_NPM_GLOBALS="${UPDATE_NPM_GLOBALS:-true}"   # npm update -g if npm is available
+UPDATE_PIPX="${UPDATE_PIPX:-true}"                 # pipx upgrade-all (updates uv and other pipx tools)
 
 # =========================
 # IMPLEMENTATION
@@ -24,6 +25,7 @@ Usage: update-ubuntu.sh [options]
   --skip-k9s           Skip k9s update
   --skip-kubectx       Skip kubectx/kubens update
   --skip-npm-globals   Skip global npm package update
+  --skip-pipx          Skip pipx upgrade-all
   -h, --help           Show this help
 EOF
 }
@@ -35,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --skip-k9s)          UPDATE_K9S=false ;;
     --skip-kubectx)      UPDATE_KUBECTX=false ;;
     --skip-npm-globals)  UPDATE_NPM_GLOBALS=false ;;
+    --skip-pipx)         UPDATE_PIPX=false ;;
     -h|--help)           usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -155,6 +158,16 @@ update_npm_globals() {
   echo "✓ global npm packages up to date"
 }
 
+update_pipx() {
+  if ! ensure_command pipx; then
+    echo "✓ pipx not installed, skipping"
+    return
+  fi
+  echo "→ Upgrading pipx-managed tools (uv, etc.)"
+  pipx upgrade-all
+  echo "✓ pipx tools up to date"
+}
+
 # =========================
 # RUN
 # =========================
@@ -165,11 +178,13 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_K9S"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_KUBECTX"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_NPM_GLOBALS"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_PIPX"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 
 [[ "$UPDATE_APT"         == "true" ]] && run_step "Updating apt packages"      --skip-apt          update_apt
 [[ "$UPDATE_OH_MY_POSH"  == "true" ]] && run_step "Updating oh-my-posh"        --skip-oh-my-posh   update_oh_my_posh
 [[ "$UPDATE_K9S"         == "true" ]] && run_step "Updating k9s"               --skip-k9s          update_k9s
 [[ "$UPDATE_KUBECTX"     == "true" ]] && run_step "Updating kubectx/kubens"    --skip-kubectx      update_kubectx
 [[ "$UPDATE_NPM_GLOBALS" == "true" ]] && run_step "Updating global npm packages" --skip-npm-globals update_npm_globals
+[[ "$UPDATE_PIPX"        == "true" ]] && run_step "Upgrading pipx tools"          --skip-pipx         update_pipx
 
 log "Done."

@@ -9,7 +9,7 @@ $Config = @{
   UpdateWSL          = $true   # wsl --update — WSL kernel/runtime
   UpdatePSModules    = $false  # Update-Module — all installed PowerShell modules (slow, low payoff)
   WingetUpgradeAll   = $true   # winget upgrade --all
-  UpdateNpmGlobals   = $true   # ncu -g if npm and ncu are available
+  UpdateNpmGlobals   = $true   # npm update -g (in-range updates) if npm is available
 }
 
 # =========================
@@ -34,7 +34,15 @@ function Test-Command($Name) {
 function Update-WindowsOS {
   if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
     Write-Host "→ Installing PSWindowsUpdate module" -ForegroundColor Cyan
-    Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser
+    # Windows PowerShell 5.1 defaults to TLS 1.0, which PSGallery rejects; and a
+    # fresh box has no NuGet provider and an untrusted gallery — all of which turn
+    # into prompts or hard failures. Handle them non-interactively.
+    [Net.ServicePointManager]::SecurityProtocol =
+      [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+      Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+    }
+    Install-Module -Name PSWindowsUpdate -Force -Scope CurrentUser -Confirm:$false -AllowClobber
   }
   Import-Module PSWindowsUpdate
   Write-Host "→ Installing Windows Updates" -ForegroundColor Cyan
@@ -71,8 +79,15 @@ function Update-PSModules {
 
 function Update-StoreApps {
   Write-Host "→ Triggering Microsoft Store update scan" -ForegroundColor Cyan
-  $obj = Get-CimInstance -Namespace "root\cimv2\mdm\dmmap" `
-    -ClassName "MDM_EnterpriseModernAppManagement_AppManagement01"
+  # The MDM app-management class is absent on some Windows editions/configs;
+  # treat that as a graceful skip rather than a run-ending error.
+  try {
+    $obj = Get-CimInstance -Namespace "root\cimv2\mdm\dmmap" `
+      -ClassName "MDM_EnterpriseModernAppManagement_AppManagement01" -ErrorAction Stop
+  } catch {
+    Write-Warning "Store update scan unavailable on this Windows edition/config. Skipping."
+    return
+  }
   Invoke-CimMethod -InputObject $obj -MethodName UpdateScanMethod | Out-Null
   Write-Host "✓ Store update scan triggered (updates install in background)" -ForegroundColor Green
 }
@@ -110,6 +125,24 @@ function Show-Progress {
   Write-Host "`n[$($script:currentStep)/$($script:totalSteps)] $Status" -ForegroundColor White
 }
 
+$script:failures = @()
+
+# Run one update step; a failure is reported and recorded, then the run continues
+# to the next step instead of aborting. Mirrors update-ubuntu.sh's run_step.
+function Invoke-Step {
+  param(
+    [Parameter(Mandatory=$true)][string]$Status,
+    [Parameter(Mandatory=$true)][scriptblock]$Action
+  )
+  Show-Progress $Status
+  try {
+    & $Action
+  } catch {
+    Write-Warning "Step failed: $Status — $($_.Exception.Message)"
+    $script:failures += $Status
+  }
+}
+
 # =========================
 # RUN
 # =========================
@@ -127,41 +160,20 @@ if ($Config.WingetUpgradeAll) { $totalSteps++ }
 if ($Config.UpdateNpmGlobals) { $totalSteps++ }
 $script:totalSteps = $totalSteps
 
-if ($Config.UpdateWindowsOS) {
-  Show-Progress "Installing Windows Updates"
-  Update-WindowsOS
-}
-
-if ($Config.UpdateDefender) {
-  Show-Progress "Updating Defender definitions"
-  Update-Defender
-}
-
-if ($Config.UpdateStoreApps) {
-  Show-Progress "Triggering Microsoft Store updates"
-  Update-StoreApps
-}
-
-if ($Config.UpdateWSL) {
-  Show-Progress "Updating WSL"
-  Update-WSL
-}
-
-if ($Config.UpdatePSModules) {
-  Show-Progress "Updating PowerShell modules"
-  Update-PSModules
-}
-
-if ($Config.WingetUpgradeAll) {
-  Show-Progress "Upgrading all winget packages"
-  Update-WingetAll
-}
-
-if ($Config.UpdateNpmGlobals) {
-  Show-Progress "Updating global npm packages"
-  Update-NpmGlobals
-}
+if ($Config.UpdateWindowsOS)  { Invoke-Step "Installing Windows Updates"       { Update-WindowsOS } }
+if ($Config.UpdateDefender)   { Invoke-Step "Updating Defender definitions"    { Update-Defender } }
+if ($Config.UpdateStoreApps)  { Invoke-Step "Triggering Microsoft Store updates" { Update-StoreApps } }
+if ($Config.UpdateWSL)        { Invoke-Step "Updating WSL"                      { Update-WSL } }
+if ($Config.UpdatePSModules)  { Invoke-Step "Updating PowerShell modules"      { Update-PSModules } }
+if ($Config.WingetUpgradeAll) { Invoke-Step "Upgrading all winget packages"    { Update-WingetAll } }
+if ($Config.UpdateNpmGlobals) { Invoke-Step "Updating global npm packages"     { Update-NpmGlobals } }
 
 Write-Progress -Activity "devbox update" -Completed
 Show-Progress "Done"
-Write-Host "All updates complete." -ForegroundColor Green
+if ($script:failures.Count -gt 0) {
+  Write-Host "`nCompleted with failures in $($script:failures.Count) step(s):" -ForegroundColor Yellow
+  $script:failures | ForEach-Object { Write-Host "  ⚠ $_" -ForegroundColor Yellow }
+  exit 1
+} else {
+  Write-Host "All updates complete." -ForegroundColor Green
+}
