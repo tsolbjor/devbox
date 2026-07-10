@@ -8,6 +8,10 @@ set -euo pipefail
 GIT_NAME="${GIT_NAME:-}"
 GIT_EMAIL="${GIT_EMAIL:-}"
 
+# When GIT_NAME/GIT_EMAIL are empty and we're inside WSL, try to derive them from the
+# logged-in Windows (Entra) user via interop. Explicitly-set env vars always win.
+AUTO_DETECT_GIT_IDENTITY="${AUTO_DETECT_GIT_IDENTITY:-true}"
+
 # Where you keep repos inside WSL
 CODE_DIR="${CODE_DIR:-$HOME/code}"
 
@@ -101,6 +105,56 @@ ensure_git_config() {
   fi
 }
 
+win_strip() {
+  # Windows tools emit trailing CR (+ whitespace); strip to a clean single line.
+  tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -n1
+}
+
+detect_windows_git_identity() {
+  [[ "$AUTO_DETECT_GIT_IDENTITY" == "true" ]] || return 0
+  # Only meaningful on WSL, where Windows interop binaries are on PATH.
+  grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null || return 0
+
+  if [[ -z "$GIT_EMAIL" ]] && ensure_command whoami.exe; then
+    local upn
+    upn="$(whoami.exe /upn 2>/dev/null | win_strip)"
+    if [[ "$upn" == *@*.* ]]; then
+      GIT_EMAIL="$upn"
+      echo "→ Detected Git email from Windows UPN: $GIT_EMAIL"
+    fi
+  fi
+
+  if [[ -z "$GIT_NAME" ]] && ensure_command powershell.exe; then
+    local disp
+    disp="$(powershell.exe -NoProfile -NonInteractive -Command \
+      "(Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI' -Name LastLoggedOnDisplayName -ErrorAction SilentlyContinue).LastLoggedOnDisplayName" \
+      2>/dev/null | win_strip)"
+    if [[ -n "$disp" ]]; then
+      GIT_NAME="$disp"
+      echo "→ Detected Git name from Windows logon display name: $GIT_NAME"
+    fi
+  fi
+
+  # Fallback: derive a name from the UPN local-part (e.g. thomas.solbjor -> Thomas Solbjor).
+  if [[ -z "$GIT_NAME" && -n "$GIT_EMAIL" ]]; then
+    GIT_NAME="$(echo "${GIT_EMAIL%%@*}" | tr '._-' '   ' \
+      | sed -e 's/\b\(.\)/\u\1/g' -e 's/[[:space:]]\+/ /g' -e 's/^ //;s/ $//')"
+    echo "→ Derived Git name from email local-part: $GIT_NAME"
+  fi
+}
+
+ensure_git_safe_directory() {
+  # Repos on /mnt/c or accessed across the \\wsl$ boundary can trip Git's
+  # "dubious ownership" guard. Mark CODE_DIR trusted (idempotent — no duplicate entry).
+  local dir="$1"
+  if git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$dir"; then
+    echo "✓ git safe.directory already set: $dir"
+  else
+    echo "→ Marking git safe.directory: $dir"
+    git config --global --add safe.directory "$dir"
+  fi
+}
+
 ensure_ssh_key() {
   if [[ -f "$SSH_KEY_PATH" ]]; then
     echo "✓ SSH key exists: $SSH_KEY_PATH"
@@ -172,6 +226,15 @@ ensure_k9s() {
 }
 
 ensure_fzf_shell_integration() {
+  ensure_command fzf || { echo "⚠ fzf not installed; skipping shell integration"; return; }
+
+  # fzf 0.48+ generates integration inline (`fzf --bash` / `--zsh`), which is
+  # version-proof. Older packaged fzf (e.g. Ubuntu 24.04 ships 0.44) has no such
+  # flag, so fall back to sourcing the packaged example scripts, whose location
+  # has moved across Debian/Ubuntu releases — hence multiple candidate paths.
+  local supports_flag=false
+  fzf --bash >/dev/null 2>&1 && supports_flag=true
+
   for pair in ".bashrc:bash" ".zshrc:zsh"; do
     local rc="$HOME/${pair%%:*}"
     local shell="${pair##*:}"
@@ -180,12 +243,28 @@ ensure_fzf_shell_integration() {
       echo "✓ fzf already in $(basename "$rc")"
       continue
     fi
-    local binding="/usr/share/doc/fzf/examples/key-bindings.${shell}"
-    local completion="/usr/share/doc/fzf/examples/completion.${shell}"
-    [[ -f "$binding" ]] || continue
+
+    if [[ "$supports_flag" == "true" ]]; then
+      echo "→ Adding fzf integration to $(basename "$rc") (fzf --${shell})"
+      printf '\neval "$(fzf --%s)"\n' "$shell" >> "$rc"
+      continue
+    fi
+
+    local binding="" completion=""
+    for dir in /usr/share/doc/fzf/examples /usr/share/fzf /usr/share/fzf/shell; do
+      if [[ -f "$dir/key-bindings.${shell}" ]]; then
+        binding="$dir/key-bindings.${shell}"
+        [[ -f "$dir/completion.${shell}" ]] && completion="$dir/completion.${shell}"
+        break
+      fi
+    done
+    if [[ -z "$binding" ]]; then
+      echo "⚠ fzf too old for 'fzf --${shell}' and no example scripts found; skipping $(basename "$rc")"
+      continue
+    fi
     echo "→ Adding fzf key bindings to $(basename "$rc")"
     printf '\nsource %s\n' "$binding" >> "$rc"
-    [[ -f "$completion" ]] && printf 'source %s\n' "$completion" >> "$rc"
+    [[ -n "$completion" ]] && printf 'source %s\n' "$completion" >> "$rc"
   done
 }
 
@@ -312,14 +391,15 @@ ensure_oh_my_posh() {
 
 # Validate required parameters
 if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
+  detect_windows_git_identity
   if [[ -z "$GIT_NAME" ]]; then
-    echo "ERROR: GIT_NAME is not set. Please set it as an environment variable." >&2
-    echo "Example: export GIT_NAME='Your Name'" >&2
+    echo "ERROR: GIT_NAME is not set and could not be detected from Windows." >&2
+    echo "Set it explicitly: export GIT_NAME='Your Name'" >&2
     exit 1
   fi
   if [[ -z "$GIT_EMAIL" ]]; then
-    echo "ERROR: GIT_EMAIL is not set. Please set it as an environment variable." >&2
-    echo "Example: export GIT_EMAIL='your.email@example.com'" >&2
+    echo "ERROR: GIT_EMAIL is not set and could not be detected from Windows." >&2
+    echo "Set it explicitly: export GIT_EMAIL='your.email@example.com'" >&2
     exit 1
   fi
 fi
@@ -405,6 +485,7 @@ if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
   ensure_git_config "core.autocrlf" "$GIT_AUTOCRLF"
   ensure_git_config "pull.rebase" "false"
   ensure_git_config "push.autoSetupRemote" "true"
+  ensure_git_safe_directory "$CODE_DIR"
 fi
 
 if [[ "$INSTALL_GITHUB_CLI" == "true" ]]; then

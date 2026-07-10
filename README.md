@@ -43,6 +43,14 @@ Installs and configures:
 Inside your WSL Ubuntu terminal:
 
 ```bash
+bash setup-ubuntu.sh
+```
+
+Git name/email auto-detect from the logged-in Windows (Entra) user — email from
+the UPN (`whoami.exe /upn`), name from the Windows logon display name. Override
+by exporting them first, or set `AUTO_DETECT_GIT_IDENTITY=false` to disable:
+
+```bash
 export GIT_NAME="Your Name"
 export GIT_EMAIL="your@email.com"
 bash setup-ubuntu.sh

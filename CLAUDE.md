@@ -23,9 +23,9 @@ Both scripts are safe to rerun (idempotent).
 ```
 
 ```bash
-# Ubuntu/WSL — GIT_NAME and GIT_EMAIL required when SET_GIT_DEFAULTS=true
-export GIT_NAME="Your Name"
-export GIT_EMAIL="your@email.com"
+# Ubuntu/WSL — GIT_NAME/GIT_EMAIL auto-detect from the Windows (Entra) user on WSL
+# (UPN + logon display name); export them to override, or set
+# AUTO_DETECT_GIT_IDENTITY=false to disable. Still required if detection finds nothing.
 bash setup-ubuntu.sh
 ```
 

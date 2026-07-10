@@ -111,6 +111,11 @@ $Config = @{
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# wsl.exe emits UTF-16LE by default; in Windows PowerShell 5.1 that leaves embedded
+# null bytes in captured output, so string matches (e.g. `-contains "Ubuntu"`) silently
+# fail. Forcing UTF-8 makes wsl output parse cleanly. (WSL 0.64+; harmless if ignored.)
+$env:WSL_UTF8 = 1
+
 function Get-SystemResources {
   $cs = Get-CimInstance Win32_ComputerSystem
   return @{
@@ -409,10 +414,24 @@ function Ensure-WSL {
   }
 
   if ($restartNeeded) {
-    Write-Warning "One or more changes require a reboot to fully take effect. Reboot, then rerun this script."
-  } else {
-    Write-Host "✓ WSL looks ready." -ForegroundColor Green
+    Write-Host ""
+    Write-Warning "WSL features / distro install require a reboot before setup can continue."
+    Write-Host @"
+
+  This is a multi-pass setup on a fresh machine:
+    PASS 1 (done)  Enabled WSL features / started distro install.
+    -> REBOOT NOW, then rerun this script (PASS 2).
+    PASS 2         Finishes distro install + Windows Terminal / Rancher / Defender config.
+                   (App config steps warn-and-skip until each app has launched once.)
+    THEN           Launch Ubuntu once to create your UNIX user, then inside WSL run:
+                     bash setup-ubuntu.sh
+                   Git name/email auto-detect from the Windows (Entra) user. To override:
+                     export GIT_NAME="Your Name"; export GIT_EMAIL="your@email.com"
+"@ -ForegroundColor Yellow
+    exit 0
   }
+
+  Write-Host "✓ WSL looks ready." -ForegroundColor Green
 }
 
 function Ensure-WSLConfigFile {
@@ -840,24 +859,40 @@ function Show-Progress {
 
 function Add-WslDefenderExclusion {
   $packagesPath = Join-Path $env:LOCALAPPDATA "Packages"
-  $existing = (Get-MpPreference).ExclusionPath | Where-Object { $_ -like "*CanonicalGroupLimited*" }
-  if ($existing) {
-    Write-Host "✓ Windows Defender WSL exclusion already configured." -ForegroundColor Green
-    return
-  }
+  $existing = @((Get-MpPreference).ExclusionPath)
+
+  $targets = [System.Collections.Generic.List[string]]::new()
+
+  # Ubuntu (and any other Store distro) vhdx lives under its package LocalState.
   $wslDirs = Get-ChildItem -Path $packagesPath -Filter "CanonicalGroupLimited*" -Directory -ErrorAction SilentlyContinue
   if (-not $wslDirs) {
     Write-Warning "No WSL package directories found under $packagesPath. Run after WSL is installed."
-    return
   }
   foreach ($dir in $wslDirs) {
     $localState = Join-Path $dir.FullName "LocalState"
-    if (Test-Path $localState) {
-      Write-Host "→ Adding Defender exclusion: $localState" -ForegroundColor Cyan
-      Add-MpPreference -ExclusionPath $localState
-    }
+    if (Test-Path $localState) { [void]$targets.Add($localState) }
   }
-  Write-Host "✓ WSL directories excluded from Windows Defender." -ForegroundColor Green
+
+  # Rancher Desktop's WSL data disk (rancher-desktop / rancher-desktop-data vhdx).
+  $rdData = Join-Path $env:LOCALAPPDATA "rancher-desktop"
+  if (Test-Path $rdData) { [void]$targets.Add($rdData) }
+
+  if ($targets.Count -eq 0) {
+    Write-Warning "No WSL/Rancher data directories found to exclude yet. Rerun after WSL and Rancher Desktop are installed."
+    return
+  }
+
+  $added = $false
+  foreach ($t in $targets) {
+    if ($existing -contains $t) {
+      Write-Host "✓ Defender exclusion already set: $t" -ForegroundColor Green
+      continue
+    }
+    Write-Host "→ Adding Defender exclusion: $t" -ForegroundColor Cyan
+    Add-MpPreference -ExclusionPath $t
+    $added = $true
+  }
+  if ($added) { Write-Host "✓ WSL/Rancher directories excluded from Windows Defender." -ForegroundColor Green }
 }
 
 # =========================
