@@ -19,7 +19,7 @@ $Config = @{
     AutoSetupRemote = "true"
   }
   Install7Zip            = $true
-  InstallNode            = $true   # OpenJS.NodeJS.LTS + ncu global
+  InstallNode            = $false  # Node lives in WSL (setup-ubuntu.sh); host rarely needs it
 
   # Oh My Posh — prompt theme engine; configures PowerShell profiles for PS5 and PS7
   OhMyPosh = @{
@@ -33,11 +33,9 @@ $Config = @{
     "NERD-Fonts.JetBrainsMono"
   )
 
-  # Cloud CLIs (remove any you don't need)
+  # Cloud CLIs (remove any you don't need; add Amazon.AWSCLI / Google.CloudSDK if multi-cloud)
   CloudCLIs = @(
-    "Microsoft.AzureCLI",
-    "Amazon.AWSCLI",
-    "Google.CloudSDK"
+    "Microsoft.AzureCLI"
   )
 
   # Windows Terminal profile defaults (applied to all profiles via profiles.defaults)

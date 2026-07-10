@@ -61,9 +61,11 @@ Installs and configures:
 | Category | What gets set up |
 |---|---|
 | Shell | zsh (set as default), Oh My Posh, fzf with key bindings |
-| Dev tools | git, build-essential, ripgrep, fd, jq, wget, zip, GitHub CLI |
+| Dev tools | git, build-essential, ripgrep, fd, jq, wget, zip, GitHub CLI, Node.js |
+| Languages | .NET SDK, Python (venv/pip/pipx/uv) |
 | Kubernetes | kubectl, helm, k9s, kubectx, kubens |
-| Git | user config, defaultBranch, pull.rebase, push.autoSetupRemote |
+| Containers | verifies Rancher Desktop's docker is wired into WSL |
+| Git | user config (auto-detected from Windows), defaults, SSH commit signing |
 | SSH | ed25519 key pair |
 | System | /etc/wsl.conf (automount metadata, systemd) |
 
@@ -75,7 +77,7 @@ Both scripts have a `PARAMETERS` section at the very top — edit values there b
 
 **Windows** — remove entries from `Fonts`, `CloudCLIs`, or `VSCodeExtensions`; change the Oh My Posh theme; override `WslConfig` memory/CPU values explicitly instead of auto-detecting.
 
-**Ubuntu** — set `INSTALL_KUBECTL=false` to skip Kubernetes tools; change `OH_MY_POSH_THEME` to any name from [ohmyposh.dev/docs/themes](https://ohmyposh.dev/docs/themes); set `WSL_ENABLE_SYSTEMD=false` on older Windows builds.
+**Ubuntu** — set `INSTALL_KUBECTL=false` to skip Kubernetes tools; toggle `INSTALL_DOTNET` / `INSTALL_PYTHON` (or pin `DOTNET_SDK_VERSION`); set `GIT_SIGN_COMMITS=false` to skip SSH commit signing; change `OH_MY_POSH_THEME` to any name from [ohmyposh.dev/docs/themes](https://ohmyposh.dev/docs/themes); set `WSL_ENABLE_SYSTEMD=false` on older Windows builds.
 
 ## System requirements
 

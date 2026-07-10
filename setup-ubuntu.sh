@@ -49,6 +49,11 @@ WSL_ENABLE_SYSTEMD="${WSL_ENABLE_SYSTEMD:-true}"   # requires Windows 11 22H2+ /
 SET_ZSH_DEFAULT="${SET_ZSH_DEFAULT:-true}"
 SET_GIT_DEFAULTS="${SET_GIT_DEFAULTS:-true}"
 ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
+INSTALL_DOTNET="${INSTALL_DOTNET:-true}"
+DOTNET_SDK_VERSION="${DOTNET_SDK_VERSION:-8.0}"   # e.g. 8.0 (LTS) or 10.0; https://dotnet.microsoft.com/download
+INSTALL_PYTHON="${INSTALL_PYTHON:-true}"          # python3 venv/pip + pipx + uv
+DOCKER_CHECK="${DOCKER_CHECK:-true}"              # verify Rancher Desktop's docker is wired into WSL
+GIT_SIGN_COMMITS="${GIT_SIGN_COMMITS:-true}"      # SSH-sign commits/tags with the generated key
 
 # Git defaults
 GIT_DEFAULT_BRANCH="${GIT_DEFAULT_BRANCH:-main}"
@@ -385,6 +390,64 @@ ensure_oh_my_posh() {
   fi
 }
 
+ensure_dotnet() {
+  if ensure_command dotnet; then
+    echo "✓ dotnet already installed ($(dotnet --version 2>/dev/null))"
+    return
+  fi
+  local pkg="dotnet-sdk-${DOTNET_SDK_VERSION}"
+  echo "→ Installing .NET SDK ${DOTNET_SDK_VERSION}"
+  # Prefer the distro feed (Ubuntu 24.04+ ships dotnet); fall back to Microsoft's
+  # feed for versions/releases Canonical doesn't package.
+  if ! apt-cache show "$pkg" >/dev/null 2>&1; then
+    echo "→ Adding Microsoft package feed"
+    local ver_id
+    ver_id="$(. /etc/os-release && echo "$VERSION_ID")"
+    local deb="/tmp/packages-microsoft-prod.deb"
+    curl -fsSL "https://packages.microsoft.com/config/ubuntu/${ver_id}/packages-microsoft-prod.deb" -o "$deb"
+    sudo dpkg -i "$deb"
+    rm -f "$deb"
+    sudo apt-get update -y
+  fi
+  sudo apt-get install -y "$pkg"
+  echo "✓ .NET SDK installed ($(dotnet --version 2>/dev/null))"
+}
+
+ensure_python() {
+  for p in python3 python3-venv python3-pip pipx; do
+    ensure_pkg "$p"
+  done
+  # Put pipx-installed tools on PATH (idempotent; writes to rc files if needed).
+  pipx ensurepath >/dev/null 2>&1 || true
+  if pipx list 2>/dev/null | grep -q '\buv\b'; then
+    echo "✓ uv already installed"
+  else
+    echo "→ Installing uv (via pipx)"
+    pipx install uv
+  fi
+}
+
+docker_check() {
+  if ensure_command docker && docker version >/dev/null 2>&1; then
+    echo "✓ docker reachable from WSL ($(docker version --format '{{.Client.Version}}' 2>/dev/null))"
+  elif ensure_command docker; then
+    echo "⚠ docker CLI present but daemon not reachable. Start Rancher Desktop (moby engine)."
+  else
+    echo "⚠ docker not found in WSL."
+    echo "  In Rancher Desktop: Preferences → WSL → Integrations → enable '$(. /etc/os-release && echo "$NAME")' (this distro)."
+  fi
+}
+
+ensure_git_signing() {
+  # SSH-sign commits/tags with the key we generate. GitHub verifies these once the
+  # SAME public key is added as a *Signing key* (in addition to an Authentication key).
+  [[ -f "${SSH_KEY_PATH}.pub" ]] || { echo "⚠ No SSH key at ${SSH_KEY_PATH}.pub; skipping commit signing."; return; }
+  ensure_git_config "gpg.format" "ssh"
+  ensure_git_config "user.signingkey" "${SSH_KEY_PATH}.pub"
+  ensure_git_config "commit.gpgsign" "true"
+  ensure_git_config "tag.gpgsign" "true"
+}
+
 # =========================
 # RUN
 # =========================
@@ -415,6 +478,9 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
 [[ "$INSTALL_KUBECTX"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_OH_MY_POSH" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_NODE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_DOTNET"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_PYTHON"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$DOCKER_CHECK"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$ENSURE_SSH_KEY"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 
 log "Updating apt metadata"
@@ -538,9 +604,27 @@ if [[ "$INSTALL_NODE" == "true" ]]; then
   ensure_node
 fi
 
+if [[ "$INSTALL_DOTNET" == "true" ]]; then
+  log "Installing .NET SDK"
+  ensure_dotnet
+fi
+
+if [[ "$INSTALL_PYTHON" == "true" ]]; then
+  log "Installing Python (venv/pip/pipx/uv)"
+  ensure_python
+fi
+
+if [[ "$DOCKER_CHECK" == "true" ]]; then
+  log "Checking docker (Rancher Desktop WSL integration)"
+  docker_check
+fi
+
 if [[ "$ENSURE_SSH_KEY" == "true" ]]; then
   log "Ensuring SSH key"
   ensure_ssh_key
+  if [[ "$SET_GIT_DEFAULTS" == "true" && "$GIT_SIGN_COMMITS" == "true" ]]; then
+    ensure_git_signing
+  fi
 fi
 
 log "Done."
@@ -548,6 +632,10 @@ echo "Next steps:"
 if [[ -f "${SSH_KEY_PATH}.pub" ]]; then
   echo " 1. Add your SSH public key to GitHub → https://github.com/settings/keys"
   echo "    $(cat "${SSH_KEY_PATH}.pub")"
+  if [[ "$SET_GIT_DEFAULTS" == "true" && "$GIT_SIGN_COMMITS" == "true" ]]; then
+    echo "    Add it TWICE: once as an 'Authentication key' and once as a 'Signing key'"
+    echo "    (commits are SSH-signed; signing key is required for the Verified badge)."
+  fi
 else
   echo " 1. Generate an SSH key and add it to GitHub → https://github.com/settings/keys"
 fi
