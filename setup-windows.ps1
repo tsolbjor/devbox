@@ -771,7 +771,14 @@ function Ensure-RancherDesktopConfig {
 }
 
 function Ensure-NodeAndNcu {
-  Install-WingetPackage -Id "OpenJS.NodeJS.LTS"
+  # If Node is already on PATH (installed by any means), skip the winget install.
+  # Re-running the MSI over an install winget doesn't track produces a 1603
+  # collision. Update Node later via `winget upgrade` (or reinstall by hand).
+  if (Test-Command "node") {
+    Write-Host "✓ Node.js already installed ($(node --version))" -ForegroundColor Green
+  } else {
+    Install-WingetPackage -Id "OpenJS.NodeJS.LTS"
+  }
 
   # Refresh PATH so npm is available in this session after a fresh install
   $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
