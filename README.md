@@ -123,6 +123,31 @@ bash update-ubuntu.sh
 Toggle individual steps in each script's `PARAMETERS` block (or via `--skip-*`
 flags / env vars on Ubuntu).
 
+## Detecting drift
+
+Over time a machine accumulates apps and config the setup process doesn't know
+about. The `audit-*` scripts report that drift — **read-only, they change
+nothing** — and derive "expected" state by parsing the setup scripts themselves,
+so they can't fall out of sync with what setup actually does.
+
+```powershell
+# Windows: winget apps / VS Code extensions / npm globals not in (or missing
+# from) setup, plus managed-config drift (WezTerm, PowerShell profiles,
+# .wslconfig, cache env vars, Git)
+.\audit-windows.ps1
+```
+
+```bash
+# Ubuntu / WSL: expected CLIs, managed rc blocks, starship.toml, /etc/wsl.conf,
+# Git, default shell, plus extra snap/pipx/npm apps
+bash audit-ubuntu.sh              # add --apt-extras / --local-bin for noisier checks
+```
+
+Each finding prints a two-way reconcile hint: how to **fix** the drift (rerun
+setup, install/uninstall) and, for unexpected apps, how to **adopt** it into
+setup (add to a `$Config` array / `APT_PACKAGES` / an `ensure_*` step) — so the
+report doubles as a worklist for updating the setup scripts.
+
 ## System requirements
 
 | | Minimum |

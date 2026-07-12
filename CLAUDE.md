@@ -15,8 +15,12 @@ Idempotent setup scripts for a Windows + WSL2 development environment. There are
 | `setup-ubuntu.sh` | Bash | Normal user | Installs apt packages, configures Git globally, generates SSH key, creates `~/code` |
 | `update-windows.ps1` | PowerShell | Administrator | Maintenance-only refresh of an existing machine: OS/Defender/Store updates, `wsl --update`, `winget upgrade --all`, global npm packages. Installs nothing new |
 | `update-ubuntu.sh` | Bash | Normal user | Maintenance-only refresh: apt upgrade plus starship, zoxide, git-delta, lazygit, stern, k9s, kubectx, npm globals, pipx tools. `--skip-*` flags opt out |
+| `audit-windows.ps1` | PowerShell | Normal user | Read-only drift report: winget apps / VS Code extensions / npm globals not in (or missing from) setup, plus managed-config drift (WezTerm, PS profiles, `.wslconfig`, cache env vars, Git). Changes nothing; prints two-way reconcile hints |
+| `audit-ubuntu.sh` | Bash | Normal user | Read-only drift report: expected CLIs, managed rc blocks, `starship.toml`, `/etc/wsl.conf`, Git, default shell, plus extra snap/pipx/npm apps. `--apt-extras` / `--local-bin` add noisier checks. Changes nothing; prints two-way reconcile hints |
 
-All scripts are safe to rerun (idempotent).
+All scripts are safe to rerun (idempotent). The `audit-*` scripts are additionally read-only.
+
+The audit scripts derive their "expected" state by parsing the setup scripts — `audit-windows.ps1` AST-extracts the `$Config` hashtable and regexes `-Id`/`npm install -g` calls out of `setup-windows.ps1`; `audit-ubuntu.sh` parses the `APT_PACKAGES` array plus `ensure_pkg`/`ensure_command` calls out of `setup-ubuntu.sh`. Keep that parsing in sync when the setup scripts change shape (e.g. renaming `$Config` keys or the package array).
 
 ## Running the scripts
 
