@@ -104,6 +104,18 @@ $Config = @{
     "ms-vscode-remote.remote-containers",
     "ms-azuretools.vscode-docker"
   )
+
+  # Relocate Windows-host package caches onto the Dev Drive (created by
+  # bootstrap-windows.ps1). Keeping caches on the trusted ReFS Dev Drive is
+  # Microsoft's recommended layout — faster restores, skipped from AV scanning.
+  # Sets per-user environment variables; only affects host tooling (npm/nuget on
+  # Windows). WSL/.NET-in-Linux caches live in the Linux filesystem, untouched.
+  DevDrivePackageCaches = @{
+    Configure = $true
+    Root      = "D:\packages"   # must be on the Dev Drive for the perf/trust benefit
+    Npm       = $true           # npm_config_cache
+    NuGet     = $true           # NUGET_PACKAGES + http/plugins caches
+  }
 }
 
 # =========================
@@ -800,6 +812,57 @@ function Ensure-WindowsGitConfig {
   Ensure-GitSetting "push.autoSetupRemote" $GitConfig.AutoSetupRemote
 }
 
+# Set a per-user (persistent) environment variable, idempotently, and mirror it
+# into the current session so the change takes effect without a new terminal.
+function Set-UserEnvVar {
+  param(
+    [Parameter(Mandatory=$true)][string]$Name,
+    [Parameter(Mandatory=$true)][string]$Value
+  )
+  $current = [System.Environment]::GetEnvironmentVariable($Name, "User")
+  if ($current -eq $Value) {
+    Write-Host "✓ $Name already set to $Value" -ForegroundColor Green
+  } else {
+    Write-Host "→ Setting $Name = $Value (User)" -ForegroundColor Cyan
+    [System.Environment]::SetEnvironmentVariable($Name, $Value, "User")
+  }
+  Set-Item -Path "Env:$Name" -Value $Value   # current session
+}
+
+# Point npm/NuGet caches at the Dev Drive so package restores land on the trusted
+# ReFS volume. See the DevDrivePackageCaches block in PARAMETERS.
+function Ensure-DevDrivePackageCaches {
+  param([Parameter(Mandatory=$true)]$Spec)
+
+  if (-not $Spec.Configure) { return }
+
+  $driveLetter = ($Spec.Root -split ":")[0]
+  if (-not (Test-Path "$driveLetter`:\")) {
+    Write-Warning "Drive $driveLetter`: not found — run bootstrap-windows.ps1 first. Skipping package-cache relocation."
+    return
+  }
+
+  if ($Spec.Npm) {
+    $npmCache = Join-Path $Spec.Root "npm"
+    New-Item -ItemType Directory -Path $npmCache -Force | Out-Null
+    Set-UserEnvVar -Name "npm_config_cache" -Value $npmCache
+  }
+
+  if ($Spec.NuGet) {
+    $nugetPackages = Join-Path $Spec.Root "nuget\packages"
+    $nugetHttp     = Join-Path $Spec.Root "nuget\http"
+    $nugetPlugins  = Join-Path $Spec.Root "nuget\plugins"
+    foreach ($d in @($nugetPackages, $nugetHttp, $nugetPlugins)) {
+      New-Item -ItemType Directory -Path $d -Force | Out-Null
+    }
+    Set-UserEnvVar -Name "NUGET_PACKAGES"            -Value $nugetPackages
+    Set-UserEnvVar -Name "NUGET_HTTP_CACHE_PATH"     -Value $nugetHttp
+    Set-UserEnvVar -Name "NUGET_PLUGINS_CACHE_PATH"  -Value $nugetPlugins
+  }
+
+  Write-Host "✓ Package caches point to $($Spec.Root)" -ForegroundColor Green
+}
+
 function Enable-LongPaths {
   $key = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
   $current = (Get-ItemProperty -Path $key -Name "LongPathsEnabled" -ErrorAction SilentlyContinue).LongPathsEnabled
@@ -985,6 +1048,7 @@ Show-Progress "Applying system settings"
 if ($Config.EnableLongPaths)        { Enable-LongPaths }
 if ($Config.EnableOpenSSHAgent)     { Enable-OpenSSHAgent }
 if ($Config.ExcludeWslFromDefender) { Add-WslDefenderExclusion }
+if ($Config.DevDrivePackageCaches.Configure) { Ensure-DevDrivePackageCaches -Spec $Config.DevDrivePackageCaches }
 
 Write-Progress -Activity "devbox setup" -Completed
 Write-Host "`nDone." -ForegroundColor Green

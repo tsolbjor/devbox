@@ -56,6 +56,7 @@ Installs and configures:
 | WezTerm | JetBrains Mono Nerd Font, One Half Dark scheme, bar cursor, bell off; opens Ubuntu by default; Ctrl+Shift+1/2/3 switch cmd / pwsh (D:\code) / Ubuntu |
 | PowerShell prompt | Starship (nerd-font-symbols preset) for PS5 and PS7 |
 | PowerShell UX | fzf + PSFzf (Ctrl+T / Ctrl+R), PSReadLine predictive IntelliSense (ListView) |
+| Package caches | npm + NuGet caches relocated onto the `D:` Dev Drive (per-user env vars) |
 | System | Long path support, OpenSSH Agent, Defender exclusion for WSL vhdx |
 | Git | autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote |
 
