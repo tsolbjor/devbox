@@ -35,6 +35,7 @@ Installs and configures:
 | Rancher Desktop | moby engine (Docker-compatible), Kubernetes enabled |
 | WezTerm | JetBrains Mono Nerd Font, One Half Dark scheme, bar cursor, bell off; opens Ubuntu by default; Ctrl+Shift+1/2/3 switch cmd / pwsh (D:\code) / Ubuntu |
 | PowerShell prompt | Starship (nerd-font-symbols preset) for PS5 and PS7 |
+| PowerShell UX | fzf + PSFzf (Ctrl+T / Ctrl+R), PSReadLine predictive IntelliSense (ListView) |
 | System | Long path support, OpenSSH Agent, Defender exclusion for WSL vhdx |
 | Git | autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote |
 
@@ -60,10 +61,10 @@ Installs and configures:
 
 | Category | What gets set up |
 |---|---|
-| Shell | zsh (set as default), Starship, fzf with key bindings |
-| Dev tools | git, build-essential, ripgrep, fd, jq, wget, zip, GitHub CLI, Node.js |
+| Shell | zsh (set as default), Starship, fzf, zoxide, zsh-autosuggestions + zsh-syntax-highlighting |
+| Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, wget, zip, git-delta, lazygit, GitHub CLI, Node.js |
 | Languages | .NET SDK, Python (venv/pip/pipx/uv) |
-| Kubernetes | kubectl, helm, k9s, kubectx, kubens |
+| Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern |
 | Containers | verifies Rancher Desktop's docker is wired into WSL |
 | Git | user config (auto-detected from Windows), defaults, SSH commit signing |
 | SSH | ed25519 key pair |

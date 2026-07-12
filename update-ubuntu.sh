@@ -7,6 +7,10 @@ set -euo pipefail
 
 UPDATE_APT="${UPDATE_APT:-true}"
 UPDATE_STARSHIP="${UPDATE_STARSHIP:-true}"
+UPDATE_ZOXIDE="${UPDATE_ZOXIDE:-true}"
+UPDATE_DELTA="${UPDATE_DELTA:-true}"
+UPDATE_LAZYGIT="${UPDATE_LAZYGIT:-true}"
+UPDATE_STERN="${UPDATE_STERN:-true}"
 UPDATE_K9S="${UPDATE_K9S:-true}"
 UPDATE_KUBECTX="${UPDATE_KUBECTX:-true}"
 UPDATE_NPM_GLOBALS="${UPDATE_NPM_GLOBALS:-true}"   # npm update -g if npm is available
@@ -22,6 +26,10 @@ Usage: update-ubuntu.sh [options]
 
   --skip-apt           Skip apt update/upgrade
   --skip-starship      Skip starship update
+  --skip-zoxide        Skip zoxide update
+  --skip-delta         Skip git-delta update
+  --skip-lazygit       Skip lazygit update
+  --skip-stern         Skip stern update
   --skip-k9s           Skip k9s update
   --skip-kubectx       Skip kubectx/kubens update
   --skip-npm-globals   Skip global npm package update
@@ -34,6 +42,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-apt)          UPDATE_APT=false ;;
     --skip-starship)     UPDATE_STARSHIP=false ;;
+    --skip-zoxide)       UPDATE_ZOXIDE=false ;;
+    --skip-delta)        UPDATE_DELTA=false ;;
+    --skip-lazygit)      UPDATE_LAZYGIT=false ;;
+    --skip-stern)        UPDATE_STERN=false ;;
     --skip-k9s)          UPDATE_K9S=false ;;
     --skip-kubectx)      UPDATE_KUBECTX=false ;;
     --skip-npm-globals)  UPDATE_NPM_GLOBALS=false ;;
@@ -100,6 +112,83 @@ update_starship() {
   else
     echo "✓ starship updated: $before → $after"
   fi
+}
+
+update_zoxide() {
+  if ! ensure_command zoxide; then
+    echo "✓ zoxide not installed, skipping"
+    return
+  fi
+  local before after
+  before=$(zoxide --version 2>/dev/null || echo "?")
+  echo "→ Updating zoxide (current: $before)"
+  curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh \
+    | sh -s -- --bin-dir "$HOME/.local/bin"
+  after=$(zoxide --version 2>/dev/null || echo "?")
+  if [[ "$before" == "$after" ]]; then
+    echo "✓ zoxide already at latest ($after)"
+  else
+    echo "✓ zoxide updated: $before → $after"
+  fi
+}
+
+update_delta() {
+  if ! ensure_command delta; then
+    echo "✓ delta not installed, skipping"
+    return
+  fi
+  local current latest arch
+  current=$(delta --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  latest=$(get_github_latest_tag "dandavison/delta")   # no leading 'v'
+  if [[ "$current" == "$latest" ]]; then
+    echo "✓ delta already at latest ($current)"
+    return
+  fi
+  echo "→ Updating delta: $current → $latest"
+  arch=$([ "$(dpkg --print-architecture)" = "amd64" ] && echo "x86_64" || echo "aarch64")
+  curl -fsSL "https://github.com/dandavison/delta/releases/download/${latest}/delta-${latest}-${arch}-unknown-linux-gnu.tar.gz" \
+    | sudo tar -xz --strip-components=1 -C /usr/local/bin "delta-${latest}-${arch}-unknown-linux-gnu/delta"
+  echo "✓ delta updated to $latest"
+}
+
+update_lazygit() {
+  if ! ensure_command lazygit; then
+    echo "✓ lazygit not installed, skipping"
+    return
+  fi
+  local current latest num arch
+  current=$(lazygit --version 2>/dev/null | grep -oE 'version=[0-9]+\.[0-9]+\.[0-9]+' | cut -d= -f2 | head -1 || echo "unknown")
+  latest=$(get_github_latest_tag "jesseduffield/lazygit")   # vX.Y.Z
+  num="${latest#v}"
+  if [[ "$current" == "$num" ]]; then
+    echo "✓ lazygit already at latest ($current)"
+    return
+  fi
+  echo "→ Updating lazygit: $current → $num"
+  arch=$([ "$(dpkg --print-architecture)" = "amd64" ] && echo "x86_64" || echo "arm64")
+  curl -fsSL "https://github.com/jesseduffield/lazygit/releases/download/${latest}/lazygit_${num}_Linux_${arch}.tar.gz" \
+    | sudo tar -xz -C /usr/local/bin lazygit
+  echo "✓ lazygit updated to $num"
+}
+
+update_stern() {
+  if ! ensure_command stern; then
+    echo "✓ stern not installed, skipping"
+    return
+  fi
+  local current latest num dpkg_arch
+  current=$(stern --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  latest=$(get_github_latest_tag "stern/stern")   # vX.Y.Z
+  num="${latest#v}"
+  if [[ "$current" == "$num" ]]; then
+    echo "✓ stern already at latest ($current)"
+    return
+  fi
+  echo "→ Updating stern: $current → $num"
+  dpkg_arch=$(dpkg --print-architecture)
+  curl -fsSL "https://github.com/stern/stern/releases/download/${latest}/stern_${num}_linux_${dpkg_arch}.tar.gz" \
+    | sudo tar -xz -C /usr/local/bin stern
+  echo "✓ stern updated to $num"
 }
 
 update_k9s() {
@@ -175,6 +264,10 @@ update_pipx() {
 TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_APT"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_STARSHIP"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_ZOXIDE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_DELTA"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_LAZYGIT"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_STERN"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_K9S"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_KUBECTX"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_NPM_GLOBALS"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -182,6 +275,10 @@ TOTAL_STEPS=1  # always: Done
 
 [[ "$UPDATE_APT"         == "true" ]] && run_step "Updating apt packages"      --skip-apt          update_apt
 [[ "$UPDATE_STARSHIP"    == "true" ]] && run_step "Updating starship"          --skip-starship     update_starship
+[[ "$UPDATE_ZOXIDE"      == "true" ]] && run_step "Updating zoxide"            --skip-zoxide       update_zoxide
+[[ "$UPDATE_DELTA"       == "true" ]] && run_step "Updating git-delta"         --skip-delta        update_delta
+[[ "$UPDATE_LAZYGIT"     == "true" ]] && run_step "Updating lazygit"           --skip-lazygit      update_lazygit
+[[ "$UPDATE_STERN"       == "true" ]] && run_step "Updating stern"             --skip-stern        update_stern
 [[ "$UPDATE_K9S"         == "true" ]] && run_step "Updating k9s"               --skip-k9s          update_k9s
 [[ "$UPDATE_KUBECTX"     == "true" ]] && run_step "Updating kubectx/kubens"    --skip-kubectx      update_kubectx
 [[ "$UPDATE_NPM_GLOBALS" == "true" ]] && run_step "Updating global npm packages" --skip-npm-globals update_npm_globals

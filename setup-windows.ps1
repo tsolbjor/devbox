@@ -29,6 +29,9 @@ $Config = @{
     Preset    = "nerd-font-symbols"   # `starship preset --list`; "" keeps starship's built-in default
   }
 
+  # PowerShell experience — fzf + PSFzf (Ctrl+T / Ctrl+R) and PSReadLine predictive IntelliSense
+  ConfigurePwshExtras = $true
+
   # Fonts (winget IDs)
   Fonts = @(
     "Microsoft.CascadiaCode",
@@ -521,6 +524,72 @@ function Ensure-StarshipPowerShell {
   }
 }
 
+function Ensure-PSGalleryModule {
+  param(
+    [Parameter(Mandatory=$true)][string]$Name,
+    [string]$MinimumVersion
+  )
+  $present = Get-Module -ListAvailable -Name $Name |
+    Where-Object { -not $MinimumVersion -or $_.Version -ge [version]$MinimumVersion }
+  if ($present) {
+    Write-Host "✓ PowerShell module present: $Name" -ForegroundColor Green
+    return
+  }
+  Write-Host "→ Installing PowerShell module: $Name" -ForegroundColor Cyan
+  # PS 5.1 defaults to TLS 1.0 (PSGallery rejects) and a fresh box lacks the NuGet provider.
+  [Net.ServicePointManager]::SecurityProtocol =
+    [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+  }
+  $params = @{ Name = $Name; Force = $true; Scope = "CurrentUser"; AllowClobber = $true; Confirm = $false }
+  if ($MinimumVersion) { $params.MinimumVersion = $MinimumVersion }
+  Install-Module @params
+}
+
+function Ensure-PowerShellExperience {
+  Install-WingetPackage -Id "junegunn.fzf"
+  # ListView prediction needs PSReadLine 2.2+ (Windows PowerShell 5.1 ships 2.0); PSFzf needs fzf.
+  Ensure-PSGalleryModule -Name "PSReadLine" -MinimumVersion "2.3.4"
+  Ensure-PSGalleryModule -Name "PSFzf"
+
+  $snippet = @'
+
+# --- devbox: PSReadLine predictions + PSFzf (managed block) ---
+if ((Get-Module PSReadLine).Version -ge [version]'2.2.0') {
+  Set-PSReadLineOption -PredictionSource HistoryAndPlugin -PredictionViewStyle ListView
+} elseif ((Get-Module PSReadLine).Version -ge [version]'2.1.0') {
+  Set-PSReadLineOption -PredictionSource History
+}
+if (Get-Module -ListAvailable PSFzf) {
+  Import-Module PSFzf
+  Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r'
+}
+# --- end devbox block ---
+'@
+
+  $docs = [Environment]::GetFolderPath("MyDocuments")
+  $targets = @(
+    @{ Profile = Join-Path $docs "WindowsPowerShell\Microsoft.PowerShell_profile.ps1"; Exe = "powershell" }
+    @{ Profile = Join-Path $docs "PowerShell\Microsoft.PowerShell_profile.ps1";        Exe = "pwsh" }
+  )
+  foreach ($t in $targets) {
+    if (-not (Test-Command $t.Exe)) { continue }
+
+    $dir = Split-Path $t.Profile
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+
+    $content = if (Test-Path $t.Profile) { Get-Content $t.Profile -Raw } else { "" }
+    if ($content -match "devbox: PSReadLine predictions") {
+      Write-Host "✓ PSReadLine/PSFzf block already in: $($t.Profile)" -ForegroundColor Green
+      continue
+    }
+    Write-Host "→ Adding PSReadLine/PSFzf block to: $($t.Profile)" -ForegroundColor Cyan
+    Add-Content -Path $t.Profile -Value $snippet -Encoding UTF8
+    Write-Host "✓ PowerShell experience configured in: $($t.Profile)" -ForegroundColor Green
+  }
+}
+
 function Ensure-WezTermConfig {
   param(
     [Parameter(Mandatory=$true)]$WtConfig,
@@ -812,6 +881,7 @@ if ($Config.Fonts.Count -gt 0)    { $totalSteps++ }
 if ($Config.CloudCLIs.Count -gt 0) { $totalSteps++ }
 if ($Config.WezTermConfig.Configure) { $totalSteps++ }
 if ($Config.Starship.Configure)   { $totalSteps++ }
+if ($Config.ConfigurePwshExtras)  { $totalSteps++ }
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) { $totalSteps++ }
 if ($Config.RancherDesktopConfig.Configure) { $totalSteps++ }
 $script:totalSteps = $totalSteps
@@ -885,6 +955,11 @@ if ($Config.WezTermConfig.Configure) {
 if ($Config.Starship.Configure) {
   Show-Progress "Configuring Starship"
   Ensure-StarshipPowerShell -Preset $Config.Starship.Preset
+}
+
+if ($Config.ConfigurePwshExtras) {
+  Show-Progress "Configuring PowerShell experience (fzf + PSReadLine)"
+  Ensure-PowerShellExperience
 }
 
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {

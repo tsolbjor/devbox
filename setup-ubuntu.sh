@@ -42,6 +42,15 @@ INSTALL_K9S="${INSTALL_K9S:-true}"
 INSTALL_KUBECTX="${INSTALL_KUBECTX:-true}"
 INSTALL_STARSHIP="${INSTALL_STARSHIP:-true}"
 STARSHIP_PRESET="${STARSHIP_PRESET:-nerd-font-symbols}"   # `starship preset --list`; empty keeps the built-in default
+
+# Modern CLI tools (shell experience)
+INSTALL_ZOXIDE="${INSTALL_ZOXIDE:-true}"            # smart cd (z / zi)
+INSTALL_BAT="${INSTALL_BAT:-true}"                  # cat with syntax highlighting (bat shim over batcat)
+INSTALL_EZA="${INSTALL_EZA:-true}"                  # modern ls with icons
+INSTALL_DELTA="${INSTALL_DELTA:-true}"              # git-delta: nicer diffs (wires git core.pager)
+INSTALL_LAZYGIT="${INSTALL_LAZYGIT:-true}"          # git TUI
+INSTALL_STERN="${INSTALL_STERN:-true}"              # multi-pod Kubernetes log tailing
+INSTALL_ZSH_PLUGINS="${INSTALL_ZSH_PLUGINS:-true}"  # zsh-autosuggestions + zsh-syntax-highlighting
 INSTALL_NODE="${INSTALL_NODE:-true}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"   # LTS; https://nodejs.org/en/about/previous-releases
 CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-true}"   # set false on native Linux (not WSL)
@@ -174,6 +183,11 @@ ensure_ssh_key() {
 
 ensure_command() {
   command -v "$1" >/dev/null 2>&1
+}
+
+gh_latest_tag() {
+  curl -fsSL "https://api.github.com/repos/${1}/releases/latest" \
+    | grep '"tag_name"' | cut -d'"' -f4
 }
 
 ensure_kubectl() {
@@ -346,6 +360,139 @@ ensure_node() {
   fi
 }
 
+# Append `eval "$(<tool> init <shell>)"` to bash/zsh rc files (idempotent).
+ensure_shell_init() {
+  local tool="$1" marker="$2"   # marker: unique substring already present when wired
+  for pair in ".bashrc:bash" ".zshrc:zsh"; do
+    local rc="$HOME/${pair%%:*}" shell="${pair##*:}"
+    [[ -f "$rc" ]] || continue
+    if grep -q "$marker" "$rc"; then
+      echo "✓ $tool already in $(basename "$rc")"
+    else
+      echo "→ Adding $tool init to $(basename "$rc")"
+      printf '\neval "$(%s init %s)"\n' "$tool" "$shell" >> "$rc"
+    fi
+  done
+}
+
+ensure_zoxide() {
+  if ensure_command zoxide; then
+    echo "✓ zoxide already installed"
+  else
+    echo "→ Installing zoxide"
+    curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh \
+      | sh -s -- --bin-dir "$HOME/.local/bin"
+  fi
+  ensure_shell_init zoxide 'zoxide init'
+}
+
+ensure_bat() {
+  ensure_pkg bat
+  # Debian/Ubuntu ship the binary as batcat (name clash); provide a `bat` shim like fd.
+  if ensure_command batcat && ! ensure_command bat; then
+    if [[ -L "$HOME/.local/bin/bat" || -f "$HOME/.local/bin/bat" ]]; then
+      echo "✓ bat shim already exists"
+    else
+      echo "→ Creating bat shim at ~/.local/bin/bat"
+      mkdir -p "$HOME/.local/bin"
+      ln -s "$(command -v batcat)" "$HOME/.local/bin/bat"
+    fi
+  fi
+}
+
+ensure_eza() {
+  if ensure_command eza; then
+    echo "✓ eza already installed"
+    return
+  fi
+  echo "→ Installing eza (gierens apt repo)"
+  sudo mkdir -p /etc/apt/keyrings
+  if [[ ! -f /etc/apt/keyrings/gierens.gpg ]]; then
+    curl -fsSL https://raw.githubusercontent.com/eza-community/eza/main/deb.asc \
+      | sudo gpg --dearmor -o /etc/apt/keyrings/gierens.gpg
+    sudo chmod 0644 /etc/apt/keyrings/gierens.gpg
+  fi
+  if [[ ! -f /etc/apt/sources.list.d/gierens.list ]]; then
+    echo "deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main" \
+      | sudo tee /etc/apt/sources.list.d/gierens.list > /dev/null
+    sudo apt-get update -y
+  fi
+  sudo apt-get install -y eza
+  echo "✓ eza installed"
+}
+
+ensure_delta() {
+  if ensure_command delta; then
+    echo "✓ delta already installed"
+  else
+    echo "→ Installing git-delta (latest)"
+    local version dpkg_arch arch
+    version=$(gh_latest_tag dandavison/delta)   # tags have no leading 'v' (e.g. 0.18.2)
+    dpkg_arch=$(dpkg --print-architecture)
+    arch=$([ "$dpkg_arch" = "amd64" ] && echo "x86_64" || echo "aarch64")
+    curl -fsSL "https://github.com/dandavison/delta/releases/download/${version}/delta-${version}-${arch}-unknown-linux-gnu.tar.gz" \
+      | sudo tar -xz --strip-components=1 -C /usr/local/bin "delta-${version}-${arch}-unknown-linux-gnu/delta"
+    echo "✓ delta ${version} installed"
+  fi
+  # Wire delta into git as the diff pager (idempotent)
+  ensure_git_config "core.pager" "delta"
+  ensure_git_config "interactive.diffFilter" "delta --color-only"
+  ensure_git_config "delta.navigate" "true"
+}
+
+ensure_lazygit() {
+  if ensure_command lazygit; then
+    echo "✓ lazygit already installed"
+    return
+  fi
+  echo "→ Installing lazygit (latest)"
+  local version num dpkg_arch arch
+  version=$(gh_latest_tag jesseduffield/lazygit)   # e.g. v0.44.1
+  num="${version#v}"
+  dpkg_arch=$(dpkg --print-architecture)
+  arch=$([ "$dpkg_arch" = "amd64" ] && echo "x86_64" || echo "arm64")
+  curl -fsSL "https://github.com/jesseduffield/lazygit/releases/download/${version}/lazygit_${num}_Linux_${arch}.tar.gz" \
+    | sudo tar -xz -C /usr/local/bin lazygit
+  echo "✓ lazygit ${version} installed"
+}
+
+ensure_stern() {
+  if ensure_command stern; then
+    echo "✓ stern already installed"
+    return
+  fi
+  echo "→ Installing stern (latest)"
+  local version num dpkg_arch
+  version=$(gh_latest_tag stern/stern)   # e.g. v1.30.0
+  num="${version#v}"
+  dpkg_arch=$(dpkg --print-architecture)   # amd64 / arm64 — matches stern's asset naming
+  curl -fsSL "https://github.com/stern/stern/releases/download/${version}/stern_${num}_linux_${dpkg_arch}.tar.gz" \
+    | sudo tar -xz -C /usr/local/bin stern
+  echo "✓ stern ${version} installed"
+}
+
+ensure_zsh_plugins() {
+  is_pkg_installed zsh || { echo "✓ zsh not installed, skipping plugins"; return; }
+  ensure_pkg zsh-autosuggestions
+  ensure_pkg zsh-syntax-highlighting
+  [[ -f "$HOME/.zshrc" ]] || return
+  local auto="/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh"
+  local syntax="/usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
+  if grep -q 'zsh-autosuggestions.zsh' "$HOME/.zshrc"; then
+    echo "✓ zsh-autosuggestions already sourced in .zshrc"
+  elif [[ -f "$auto" ]]; then
+    echo "→ Sourcing zsh-autosuggestions in .zshrc"
+    printf '\nsource %s\n' "$auto" >> "$HOME/.zshrc"
+  fi
+  # zsh-syntax-highlighting must be sourced last, so keep this after everything else
+  if grep -q 'zsh-syntax-highlighting.zsh' "$HOME/.zshrc"; then
+    echo "✓ zsh-syntax-highlighting already sourced in .zshrc"
+  elif [[ -f "$syntax" ]]; then
+    echo "→ Sourcing zsh-syntax-highlighting in .zshrc (kept last)"
+    printf '\nsource %s\n' "$syntax" >> "$HOME/.zshrc"
+  fi
+}
+
 ensure_starship() {
   # Install binary
   if ensure_command starship; then
@@ -478,6 +625,13 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
 [[ "$INSTALL_K9S"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_KUBECTX"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_STARSHIP"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_ZOXIDE"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_BAT"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_EZA"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_DELTA"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_LAZYGIT"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_STERN"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_ZSH_PLUGINS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_NODE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_DOTNET"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_PYTHON"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -598,6 +752,41 @@ fi
 if [[ "$INSTALL_STARSHIP" == "true" ]]; then
   log "Installing starship"
   ensure_starship
+fi
+
+if [[ "$INSTALL_ZOXIDE" == "true" ]]; then
+  log "Installing zoxide"
+  ensure_zoxide
+fi
+
+if [[ "$INSTALL_BAT" == "true" ]]; then
+  log "Installing bat"
+  ensure_bat
+fi
+
+if [[ "$INSTALL_EZA" == "true" ]]; then
+  log "Installing eza"
+  ensure_eza
+fi
+
+if [[ "$INSTALL_DELTA" == "true" ]]; then
+  log "Installing git-delta"
+  ensure_delta
+fi
+
+if [[ "$INSTALL_LAZYGIT" == "true" ]]; then
+  log "Installing lazygit"
+  ensure_lazygit
+fi
+
+if [[ "$INSTALL_STERN" == "true" ]]; then
+  log "Installing stern"
+  ensure_stern
+fi
+
+if [[ "$INSTALL_ZSH_PLUGINS" == "true" ]]; then
+  log "Installing zsh plugins"
+  ensure_zsh_plugins
 fi
 
 if [[ "$INSTALL_NODE" == "true" ]]; then
