@@ -47,11 +47,11 @@ Installs and configures:
 
 | Category | What gets set up |
 |---|---|
-| Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip |
+| Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip, Node.js (host), Azure Functions Core Tools |
 | Fonts | Cascadia Code, JetBrains Mono Nerd Font |
-| Cloud CLIs | Azure CLI, AWS CLI, Google Cloud SDK |
+| Cloud CLIs | Azure CLI (add AWS CLI / Google Cloud SDK via `CloudCLIs`) |
 | VS Code | Remote WSL, Dev Containers, Docker extensions |
-| WSL | Ubuntu distro, resource limits (75% RAM/CPU), mirrored networking, swap disabled |
+| WSL | Ubuntu distro, resource limits (75% RAM/CPU), mirrored networking, swap disabled when allocated RAM ≥ 16 GB |
 | Rancher Desktop | moby engine (Docker-compatible), Kubernetes enabled |
 | WezTerm | JetBrains Mono Nerd Font, One Half Dark scheme, bar cursor, bell off; opens Ubuntu by default; Ctrl+Shift+1/2/3 switch cmd / pwsh (D:\code) / Ubuntu |
 | PowerShell prompt | Starship (nerd-font-symbols preset) for PS5 and PS7 |
