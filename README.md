@@ -2,6 +2,9 @@
 
 Automated, idempotent setup scripts for a Windows + WSL2 development environment.
 
+> 📄 **New here?** See the [**terminal cheatsheet**](CHEATSHEET.md) for WezTerm, Starship,
+> and CLI-addon keyboard shortcuts and how-tos.
+
 ## Prerequisites
 
 **Windows** (`setup-windows.ps1`)
