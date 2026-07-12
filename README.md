@@ -20,7 +20,20 @@ Automated, idempotent setup scripts for a Windows + WSL2 development environment
 
 ### 1. Windows
 
-Open PowerShell as Administrator:
+On a fresh Entra-joined PC, open **PowerShell as Administrator** and run this to
+install Git, clone the repo to `D:\code`, and launch the setup script:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
+$env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
+New-Item -ItemType Directory -Force -Path D:\code | Out-Null
+git clone https://github.com/tsolbjor/devbox.git D:\code\devbox
+Set-Location D:\code\devbox
+.\setup-windows.ps1
+```
+
+Already have the repo cloned? Just run the script from its folder:
 
 ```powershell
 .\setup-windows.ps1
