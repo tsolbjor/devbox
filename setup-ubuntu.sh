@@ -403,22 +403,39 @@ ensure_bat() {
 ensure_eza() {
   if ensure_command eza; then
     echo "✓ eza already installed"
-    return
+  else
+    echo "→ Installing eza (gierens apt repo)"
+    sudo mkdir -p /etc/apt/keyrings
+    if [[ ! -f /etc/apt/keyrings/gierens.gpg ]]; then
+      curl -fsSL https://raw.githubusercontent.com/eza-community/eza/main/deb.asc \
+        | sudo gpg --dearmor -o /etc/apt/keyrings/gierens.gpg
+      sudo chmod 0644 /etc/apt/keyrings/gierens.gpg
+    fi
+    if [[ ! -f /etc/apt/sources.list.d/gierens.list ]]; then
+      echo "deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main" \
+        | sudo tee /etc/apt/sources.list.d/gierens.list > /dev/null
+      sudo apt-get update -y
+    fi
+    sudo apt-get install -y eza
+    echo "✓ eza installed"
   fi
-  echo "→ Installing eza (gierens apt repo)"
-  sudo mkdir -p /etc/apt/keyrings
-  if [[ ! -f /etc/apt/keyrings/gierens.gpg ]]; then
-    curl -fsSL https://raw.githubusercontent.com/eza-community/eza/main/deb.asc \
-      | sudo gpg --dearmor -o /etc/apt/keyrings/gierens.gpg
-    sudo chmod 0644 /etc/apt/keyrings/gierens.gpg
-  fi
-  if [[ ! -f /etc/apt/sources.list.d/gierens.list ]]; then
-    echo "deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main" \
-      | sudo tee /etc/apt/sources.list.d/gierens.list > /dev/null
-    sudo apt-get update -y
-  fi
-  sudo apt-get install -y eza
-  echo "✓ eza installed"
+
+  # Convenience aliases: ls/ll/lt -> eza (idempotent, marker-guarded)
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    [[ -f "$rc" ]] || continue
+    if grep -q 'devbox eza aliases' "$rc"; then
+      echo "✓ eza aliases already in $(basename "$rc")"
+    else
+      echo "→ Adding eza aliases to $(basename "$rc")"
+      cat >> "$rc" <<'ALIASES'
+
+# devbox eza aliases
+alias ls='eza --icons'
+alias ll='eza -la --icons --git'
+alias lt='eza --tree --level=2 --icons'
+ALIASES
+    fi
+  done
 }
 
 ensure_delta() {

@@ -638,10 +638,19 @@ config.launch_menu = {
 }
 
 config.keys = {
+  -- Shell switching
   { key = '1', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'cmd.exe' } } },
   { key = '2', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'pwsh.exe' }, cwd = '$pwshDirLua' } },
   { key = '3', mods = 'CTRL|SHIFT', action = act.SpawnTab { DomainName = 'WSL:$WslDistro' } },
   { key = 'l', mods = 'CTRL|SHIFT', action = act.ShowLauncher },
+  -- Panes: Ctrl+Shift+D split right, Ctrl+Shift+E split down, arrows to move, Z to zoom
+  { key = 'd', mods = 'CTRL|SHIFT', action = act.SplitHorizontal { domain = 'CurrentPaneDomain' } },
+  { key = 'e', mods = 'CTRL|SHIFT', action = act.SplitVertical { domain = 'CurrentPaneDomain' } },
+  { key = 'LeftArrow',  mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Left' },
+  { key = 'RightArrow', mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Right' },
+  { key = 'UpArrow',    mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Up' },
+  { key = 'DownArrow',  mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Down' },
+  { key = 'z', mods = 'CTRL|SHIFT', action = act.TogglePaneZoomState },
 }
 
 return config

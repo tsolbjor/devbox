@@ -58,20 +58,19 @@ New tabs/windows open **Ubuntu** by default (that's the default domain).
 Configured look: JetBrainsMono Nerd Font 12pt, `OneHalfDark` scheme, steady-bar cursor,
 bell off. The tab bar hides itself when only one tab is open.
 
-### Panes (opt-in)
+### Panes **(custom)**
 
-WezTerm doesn't bind split panes by default. To add tmux-style panes, drop this into the
-`WezTermConfig` `config.keys` block (or your own `~/.wezterm.lua`):
+Tmux-style split panes:
 
-```lua
-{ key = 'd', mods = 'CTRL|SHIFT', action = act.SplitHorizontal { domain = 'CurrentPaneDomain' } },
-{ key = 'e', mods = 'CTRL|SHIFT', action = act.SplitVertical   { domain = 'CurrentPaneDomain' } },
-{ key = 'h', mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Left' },
-{ key = 'l', mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Right' },
-{ key = 'k', mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Up' },
-{ key = 'j', mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Down' },
-{ key = 'z', mods = 'CTRL|SHIFT', action = act.TogglePaneZoomState },
-```
+| Key | Action |
+|---|---|
+| `Ctrl+Shift+D` | Split **right** (side by side) |
+| `Ctrl+Shift+E` | Split **down** (stacked) |
+| `Ctrl+Shift+←/→/↑/↓` | Move focus between panes |
+| `Ctrl+Shift+Z` | Zoom the active pane (toggle full-tab) |
+
+A split inherits the current pane's shell (e.g. splitting an Ubuntu pane gives another
+Ubuntu pane). Close a pane by exiting its shell (`exit` / `Ctrl+D`).
 
 ### Reloading config
 
@@ -166,14 +165,15 @@ In the picker: type to filter, `Tab` to multi-select, `Enter` to accept, `Esc` t
 
 ### eza — modern `ls`
 
-`eza -la` (long + hidden) · `eza --tree --level=2` · `eza -l --git` (git status column) ·
-`--icons` for Nerd Font glyphs. Handy aliases to add to your rc file:
+Setup wires these aliases into `.bashrc`/`.zshrc` for you:
 
-```sh
-alias ls='eza --icons'
-alias ll='eza -la --icons --git'
-alias lt='eza --tree --level=2 --icons'
-```
+| Alias | Expands to |
+|---|---|
+| `ls` | `eza --icons` |
+| `ll` | `eza -la --icons --git` (long, hidden, git status column) |
+| `lt` | `eza --tree --level=2 --icons` |
+
+Direct flags still work too: `eza -l --git`, `eza --tree`, `eza -la`.
 
 ### git-delta — better diffs
 
