@@ -66,7 +66,7 @@ function Get-LiteralWingetIds {
       [void]$ids.Add($m.Groups[1].Value)
     }
   }
-  return $ids
+  return ,$ids   # comma stops PowerShell enumerating the HashSet into an array
 }
 
 # npm packages setup installs globally (npm install -g <name>).
@@ -79,7 +79,7 @@ function Get-ExpectedNpmGlobals {
       [void]$names.Add($m.Groups[1].Value)
     }
   }
-  return $names
+  return ,$names   # comma stops PowerShell enumerating the HashSet into an array
 }
 
 function Test-Command($Name) { return [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
