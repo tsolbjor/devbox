@@ -632,15 +632,15 @@ config.warn_about_missing_glyphs = false
 -- Quick shell-switching. These appear in the (+) tab-bar dropdown / launcher,
 -- and Ctrl+Shift+1/2/3 spawn them directly. Ctrl+Shift+L opens the launcher.
 config.launch_menu = {
-  { label = 'cmd',    args = { 'cmd.exe' } },
-  { label = 'pwsh',   args = { 'pwsh.exe' }, cwd = '$pwshDirLua' },
+  { label = 'cmd',    args = { 'cmd.exe' }, domain = { DomainName = 'local' } },
+  { label = 'pwsh',   args = { 'pwsh.exe' }, cwd = '$pwshDirLua', domain = { DomainName = 'local' } },
   { label = 'Ubuntu', domain = { DomainName = 'WSL:$WslDistro' } },
 }
 
 config.keys = {
   -- Shell switching
-  { key = '1', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'cmd.exe' } } },
-  { key = '2', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'pwsh.exe' }, cwd = '$pwshDirLua' } },
+  { key = '1', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'cmd.exe' }, domain = { DomainName = 'local' } } },
+  { key = '2', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'pwsh.exe' }, cwd = '$pwshDirLua', domain = { DomainName = 'local' } } },
   { key = '3', mods = 'CTRL|SHIFT', action = act.SpawnTab { DomainName = 'WSL:$WslDistro' } },
   { key = 'l', mods = 'CTRL|SHIFT', action = act.ShowLauncher },
   -- Panes: Ctrl+Shift+D split right, Ctrl+Shift+E split down, arrows to move, Z to zoom
