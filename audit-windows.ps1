@@ -141,17 +141,18 @@ if ($Config.CheckVSCodeExts) {
     $expSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$expected, [System.StringComparer]::OrdinalIgnoreCase)
     $insSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$installed, [System.StringComparer]::OrdinalIgnoreCase)
 
-    foreach ($e in $expected | Where-Object { -not $insSet.Contains($_) }) {
+    $missingExt = @($expected  | Where-Object { -not $insSet.Contains($_) })
+    $extraExt   = @($installed | Where-Object { -not $expSet.Contains($_) })
+    foreach ($e in $missingExt) {
       Report-Drift "Missing extension: $e" @("install: code --install-extension $e")
     }
-    foreach ($i in $installed | Where-Object { -not $expSet.Contains($_) }) {
+    foreach ($i in $extraExt) {
       Report-Drift "Extra extension (not in setup): $i" @(
         "remove: code --uninstall-extension $i",
         "adopt:  add `"$i`" to `$Config.VSCodeExtensions in setup-windows.ps1"
       )
     }
-    if (($expected | Where-Object { -not $insSet.Contains($_) }).Count -eq 0 -and
-        ($installed | Where-Object { -not $expSet.Contains($_) }).Count -eq 0) {
+    if ($missingExt.Count -eq 0 -and $extraExt.Count -eq 0) {
       Report-Ok "VS Code extensions match setup."
     }
   }
