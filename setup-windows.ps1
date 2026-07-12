@@ -641,6 +641,17 @@ config.scrollback_lines = $($WtConfig.ScrollbackLines)
 config.hide_tab_bar_if_only_one_tab = true
 config.warn_about_missing_glyphs = false
 
+-- On launch, open two tabs: Ubuntu (default WSL domain) + a Windows pwsh tab.
+-- Swap window:spawn_tab for a split pane by replacing it with the SplitPane action.
+wezterm.on('gui-startup', function(cmd)
+  local _, _, window = wezterm.mux.spawn_window(cmd or {})
+  window:spawn_tab({
+    args = { 'pwsh.exe' },
+    cwd = '$pwshDirLua',
+    domain = { DomainName = 'local' },
+  })
+end)
+
 -- Quick shell-switching. These appear in the (+) tab-bar dropdown / launcher,
 -- and Ctrl+Shift+1/2/3 spawn them directly. Ctrl+Shift+L opens the launcher.
 config.launch_menu = {
