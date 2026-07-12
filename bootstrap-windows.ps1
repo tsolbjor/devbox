@@ -18,7 +18,9 @@ $Config = @{
     Create      = $true
     Letter      = "D"                      # target drive letter
     Label       = "Dev"                    # volume label
-    SizeGB      = 64                        # VHDX max size (Dev Drive minimum is 50 GB)
+    SizeGB      = 128                       # VHDX MAX size (Dev Drive min is 50 GB). Expandable —
+                                            # consumes real C: space only as it fills, so a big cap
+                                            # is cheap. Raise for package caches / many repos on D:.
     VhdxPath    = "C:\DevDrives\Dev.vhdx"   # backing file; re-attached at boot via a scheduled task
     FallbackNTFS = $true                    # if Dev Drive (ReFS) is unsupported, format NTFS instead
   }
