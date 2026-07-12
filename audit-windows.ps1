@@ -20,6 +20,7 @@ $Config = @{
   CheckVSCodeExts  = $true   # code --list-extensions vs $Config.VSCodeExtensions
   CheckNpmGlobals  = $true   # npm -g globals vs the ones setup installs
   CheckConfigFiles = $true   # WezTerm, PowerShell profiles, .wslconfig, cache env vars, git
+  CheckStartup     = $true   # devbox-managed startup (Dev Drive task, ssh-agent) + autostart inventory
 }
 
 # =========================
@@ -34,6 +35,8 @@ $script:driftCount = 0
 function Write-Section { param([string]$Title) Write-Host "`n=== $Title ===" -ForegroundColor White }
 function Report-Ok    { param([string]$Msg) Write-Host "✓ $Msg" -ForegroundColor Green }
 function Report-Warn  { param([string]$Msg) Write-Host "⚠ $Msg" -ForegroundColor Yellow }
+# Inventory line — visibility only, never counted as drift.
+function Report-Info  { param([string]$Msg) Write-Host "· $Msg" -ForegroundColor DarkGray }
 function Report-Drift {
   param([string]$Msg, [string[]]$Fix)
   $script:driftCount++
@@ -286,6 +289,96 @@ if ($Config.CheckConfigFiles) {
       }
     }
   }
+}
+
+# ---------- Startup & services ----------
+if ($Config.CheckStartup) {
+  Write-Section "Startup & services"
+
+  # --- devbox-managed autostart (drift if wrong) ---
+
+  # Dev Drive re-attach task registered by bootstrap-windows.ps1.
+  $devDriveTask = "DevboxMountDevDrive"
+  $task = Get-ScheduledTask -TaskName $devDriveTask -ErrorAction SilentlyContinue
+  if ($task) {
+    if ($task.State -eq 'Disabled') {
+      Report-Drift "Scheduled task '$devDriveTask' is disabled." @("fix: Enable-ScheduledTask -TaskName $devDriveTask")
+    } else {
+      Report-Ok "Scheduled task '$devDriveTask' present ($($task.State))."
+    }
+  } else {
+    Report-Warn "Scheduled task '$devDriveTask' not found (expected only if the Dev Drive was created by bootstrap-windows.ps1)."
+  }
+
+  # ssh-agent — setup sets StartupType Automatic.
+  $ssh = Get-Service -Name "ssh-agent" -ErrorAction SilentlyContinue
+  if ($ssh) {
+    if ($ssh.StartType -ne 'Automatic') {
+      Report-Drift "ssh-agent StartupType is '$($ssh.StartType)' (expected Automatic)." @(
+        "fix: Set-Service -Name ssh-agent -StartupType Automatic",
+        "or rerun: .\setup-windows.ps1"
+      )
+    } else {
+      Report-Ok "ssh-agent StartupType = Automatic (Status: $($ssh.Status))."
+    }
+  } else {
+    Report-Warn "ssh-agent service not found (enable OpenSSH Client in Optional Features)."
+  }
+
+  # --- autostart inventory (informational — not counted as drift) ---
+  Write-Host "  autostart inventory (informational — review, adopt into setup, or remove):" -ForegroundColor DarkGray
+
+  # Non-Microsoft scheduled tasks that fire at logon or boot.
+  try {
+    $userTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+      $_.TaskName -ne $devDriveTask -and
+      $_.TaskPath -notlike '\Microsoft\*' -and
+      $_.State -ne 'Disabled' -and
+      @($_.Triggers | Where-Object { $_.CimClass.CimClassName -in 'MSFT_TaskLogonTrigger','MSFT_TaskBootTrigger' }).Count -gt 0
+    })
+    foreach ($t in $userTasks) { Report-Info "task (logon/boot): $($t.TaskPath)$($t.TaskName)" }
+  } catch {}
+
+  # Run keys (per-user + machine, incl. WOW6432Node).
+  $runKeys = @(
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
+    'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
+    'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'
+  )
+  foreach ($rk in $runKeys) {
+    if (Test-Path $rk) {
+      $props = Get-ItemProperty $rk
+      foreach ($p in $props.PSObject.Properties) {
+        if ($p.Name -notmatch '^PS(Path|ParentPath|ChildName|Provider|Drive)$') {
+          Report-Info "Run key [$(Split-Path $rk -Leaf)@$($rk.Split(':')[0])]: $($p.Name)"
+        }
+      }
+    }
+  }
+
+  # Startup-folder shortcuts (user + all-users).
+  $startupDirs = @(
+    [Environment]::GetFolderPath('Startup'),
+    (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp')
+  )
+  foreach ($d in $startupDirs) {
+    if ($d -and (Test-Path $d)) {
+      foreach ($item in Get-ChildItem $d -File -ErrorAction SilentlyContinue) {
+        Report-Info "startup folder: $($item.Name)"
+      }
+    }
+  }
+
+  # Auto-start services running from outside %SystemRoot% (i.e. third-party).
+  try {
+    $sysRoot = $env:SystemRoot
+    $svcs = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object {
+      $_.StartMode -eq 'Auto' -and $_.PathName -and ($_.PathName -notmatch [regex]::Escape($sysRoot))
+    })
+    foreach ($s in $svcs | Sort-Object Name) {
+      Report-Info "auto service: $($s.Name) [$($s.State)]"
+    }
+  } catch {}
 }
 
 # ---------- summary ----------

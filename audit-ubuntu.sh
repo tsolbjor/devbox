@@ -21,6 +21,8 @@ SETUP="${SETUP:-$SCRIPT_DIR/setup-ubuntu.sh}"
 CHECK_CLIS="${CHECK_CLIS:-true}"        # expected CLIs present?
 CHECK_CONFIG="${CHECK_CONFIG:-true}"    # rc blocks, starship.toml, wsl.conf, git, shell
 CHECK_EXTRAS="${CHECK_EXTRAS:-true}"    # snap / pipx / npm globals not in setup
+CHECK_SERVICES="${CHECK_SERVICES:-true}" # systemd running-state + startup inventory (enabled units, crontab)
+CHECK_DOCKER="${CHECK_DOCKER:-true}"    # Rancher Desktop is the intended docker engine — flag shadow apt/snap engines
 APT_EXTRAS=false                        # --apt-extras: list manual apt pkgs not in setup (noisy: includes base)
 LOCAL_BIN=false                         # --local-bin: list /usr/local/bin binaries not in setup
 
@@ -43,6 +45,7 @@ drift=0
 section() { printf '\n=== %s ===\n' "$1"; }
 report_ok()   { printf '✓ %s\n' "$1"; }
 report_warn() { printf '⚠ %s\n' "$1"; }
+report_info() { printf '· %s\n' "$1"; }   # inventory line — visibility only, never counted as drift
 report_drift() {
   drift=$((drift + 1))
   printf '⚠ %s\n' "$1"; shift
@@ -187,6 +190,105 @@ if [[ "$CHECK_EXTRAS" == "true" ]]; then
       in_list "$pkg" "${EXPECTED_NPM[@]:-}" || \
         report_drift "Extra npm global: $pkg" "remove: npm uninstall -g $pkg" "adopt: add 'npm install -g $pkg' to setup-ubuntu.sh"
     done < <(npm ls -g --depth=0 --parseable 2>/dev/null | sed '1d' | sed -E 's|.*/node_modules/||')
+  fi
+fi
+
+# ---------- startup & services ----------
+if [[ "$CHECK_SERVICES" == "true" ]]; then
+  section "Startup & services"
+
+  if command -v systemctl >/dev/null 2>&1; then
+    # systemd expected up when WSL_ENABLE_SYSTEMD (default). is-system-running prints
+    # 'running'/'degraded' when the manager is PID 1, or errors when it is not.
+    state=$(systemctl is-system-running 2>/dev/null || true)
+    case "$state" in
+      running)  report_ok "systemd is running." ;;
+      degraded) report_warn "systemd running but degraded — 'systemctl --failed' to inspect." ;;
+      "")       report_warn "systemd not managing this session (WSL_ENABLE_SYSTEMD=false?)." ;;
+      *)        report_warn "systemd state: $state." ;;
+    esac
+
+    # Inventory (informational — not counted as drift): units enabled AGAINST their
+    # vendor preset, i.e. someone turned them on by hand. Baseline enabled-by-preset
+    # units are skipped so the list stays high-signal.
+    echo "  startup inventory (informational — review, adopt into setup, or disable):"
+    while read -r unit unit_state preset _; do
+      [[ -z "$unit" ]] && continue
+      # newer systemd prints a PRESET column; flag enabled-but-preset-disabled
+      if [[ "$unit_state" == "enabled" && "$preset" == "disabled" ]]; then
+        report_info "manually enabled unit: $unit"
+      fi
+    done < <(systemctl list-unit-files --type=service --state=enabled --no-legend --no-pager 2>/dev/null)
+
+    # user-scoped systemd units enabled against preset (baseline sockets skipped)
+    while read -r unit unit_state preset _; do
+      [[ -z "$unit" ]] && continue
+      if [[ "$unit_state" == "enabled" && "$preset" == "disabled" ]]; then
+        report_info "user unit manually enabled: $unit"
+      fi
+    done < <(systemctl --user list-unit-files --state=enabled --no-legend --no-pager 2>/dev/null)
+  else
+    report_warn "systemctl not available — skipping service checks."
+  fi
+
+  # user crontab (high-signal; usually empty)
+  if command -v crontab >/dev/null 2>&1; then
+    while read -r line; do
+      [[ -z "$line" || "$line" == \#* ]] && continue
+      report_info "crontab: $line"
+    done < <(crontab -l 2>/dev/null)
+  fi
+fi
+
+# ---------- docker engine ----------
+# setup-ubuntu.sh installs NO docker on the Linux side — Rancher Desktop (moby)
+# injects the CLI + socket via its WSL integration. A rival apt docker-ce or snap
+# docker ships its own dockerd that grabs /var/run/docker.sock ahead of Rancher,
+# so the shell silently talks to the wrong engine. The generic services check
+# misses this: those daemons sit at preset=enabled, and it never inspects which
+# engine owns the socket. This section does.
+if [[ "$CHECK_DOCKER" == "true" ]]; then
+  section "Docker engine (Rancher Desktop)"
+
+  # Shadow engines — any of these is drift that fights Rancher for the socket.
+  shadow=0
+  if command -v dpkg-query >/dev/null 2>&1; then
+    while read -r pkg; do
+      [[ -z "$pkg" ]] && continue
+      shadow=1
+      report_drift "Shadow apt docker package: $pkg" \
+        "remove: sudo apt-get purge -y $pkg && sudo apt-get autoremove -y" \
+        "why: Rancher Desktop provides docker in WSL; apt docker-ce runs a rival dockerd"
+    done < <(dpkg-query -W -f='${Package}\n' docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras 2>/dev/null)
+  fi
+  if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then
+    shadow=1
+    report_drift "Shadow snap docker installed" \
+      "remove: sudo snap remove docker" \
+      "why: snap dockerd grabs /var/run/docker.sock ahead of Rancher Desktop"
+  fi
+  [[ "$shadow" == "0" ]] && report_ok "No shadow docker engines (apt/snap)."
+
+  # CLI wired to Rancher, and which daemon actually answers?
+  if command -v docker >/dev/null 2>&1; then
+    docker_path=$(command -v docker)
+    case "$docker_path" in
+      *[Rr]ancher*) report_ok "docker CLI is Rancher's ($docker_path)." ;;
+      *) report_drift "docker CLI is not Rancher's: $docker_path" \
+           "fix: remove shadow docker (above), then re-toggle Rancher Desktop → WSL Integrations" \
+           "expect: a path under Rancher Desktop resources or /mnt/wsl/rancher-desktop/bin" ;;
+    esac
+
+    os=$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)
+    case "$os" in
+      *"Rancher Desktop"*) report_ok "docker daemon is Rancher Desktop ($os)." ;;
+      "") report_warn "docker daemon not reachable — start Rancher Desktop (moby engine)." ;;
+      *)  report_drift "docker daemon is not Rancher: $os" \
+            "fix: stop/remove the rival dockerd, then re-toggle Rancher Desktop → WSL Integrations" \
+            "expect: OperatingSystem = 'Rancher Desktop WSL Distribution'" ;;
+    esac
+  else
+    report_warn "docker CLI not found — enable Rancher Desktop → WSL Integrations for this distro."
   fi
 fi
 
