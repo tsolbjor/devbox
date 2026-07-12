@@ -20,24 +20,28 @@ Automated, idempotent setup scripts for a Windows + WSL2 development environment
 
 ### 1. Windows
 
-On a fresh Entra-joined PC, open **PowerShell as Administrator** and run this to
-install Git, clone the repo to `D:\code`, and launch the setup script:
+A blank, Entra-joined PC has no Git and (usually) no `D:` drive yet, so start with
+the **bootstrap**. Open **PowerShell as Administrator** and run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
-$env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
-New-Item -ItemType Directory -Force -Path D:\code | Out-Null
-git clone https://github.com/tsolbjor/devbox.git D:\code\devbox
+irm https://raw.githubusercontent.com/tsolbjor/devbox/main/bootstrap-windows.ps1 | iex
+```
+
+`bootstrap-windows.ps1` verifies winget, installs Git, creates a **Dev Drive** at
+`D:` (a VHDX-backed ReFS volume — needs no free partition, re-attached at boot),
+and clones this repo to `D:\code\devbox`. It installs no apps and doesn't touch
+WSL — it just prepares the ground, then prints the next command.
+
+Then run the full setup from the cloned folder:
+
+```powershell
 Set-Location D:\code\devbox
 .\setup-windows.ps1
 ```
 
-Already have the repo cloned? Just run the script from its folder:
-
-```powershell
-.\setup-windows.ps1
-```
+> Already have Git and a `D:` drive? Skip the bootstrap — clone the repo and run
+> `.\setup-windows.ps1` directly.
 
 Installs and configures:
 
