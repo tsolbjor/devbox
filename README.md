@@ -97,9 +97,31 @@ After the script finishes it prints your SSH public key and next steps.
 
 Both scripts have a `PARAMETERS` section at the very top — edit values there before running. No changes to the implementation section are needed for common adjustments.
 
-**Windows** — remove entries from `Fonts`, `CloudCLIs`, or `VSCodeExtensions`; change the `Starship.Preset` or the `WezTermConfig` appearance/`PwshStartDir`; override `WslConfig` memory/CPU values explicitly instead of auto-detecting.
+**Windows** — remove entries from `Fonts`, `CloudCLIs`, or `VSCodeExtensions`; change the `Starship.Preset` or the `WezTermConfig` appearance/`PwshStartDir`; override `WslConfig` memory/CPU values explicitly instead of auto-detecting; toggle `DevDrivePackageCaches` (or repoint `Root`) to control npm/NuGet cache relocation.
+
+**Bootstrap** (`bootstrap-windows.ps1`) — edit the `DevDrive` block to change the drive `Letter`, `SizeGB` (VHDX max — expandable, so it only uses real disk as it fills), or `VhdxPath`; set `Create = $false` to reuse an existing `D:`. `Repo.Url` / `CloneRoot` control where the repo lands. These only apply if you clone the repo first and run the script locally — the `irm … | iex` one-liner runs the defaults.
 
 **Ubuntu** — set `INSTALL_KUBECTL=false` to skip Kubernetes tools; toggle `INSTALL_DOTNET` / `INSTALL_PYTHON` (or pin `DOTNET_SDK_VERSION`); set `GIT_SIGN_COMMITS=false` to skip SSH commit signing; change `STARSHIP_PRESET` to any name from [starship.rs/presets](https://starship.rs/presets/) (or empty for the built-in default); set `WSL_ENABLE_SYSTEMD=false` on older Windows builds.
+
+## Keeping up to date
+
+Two maintenance scripts refresh an already-provisioned machine — they install
+nothing new, only upgrade what's there. Safe to rerun anytime.
+
+```powershell
+# Windows — as Administrator: OS updates, Defender defs, Store apps, WSL,
+# winget upgrade --all, global npm packages
+.\update-windows.ps1
+```
+
+```bash
+# Ubuntu / WSL: apt upgrade + starship, zoxide, git-delta, lazygit, stern,
+# k9s, kubectx, npm globals, pipx tools. Use --skip-<tool> to opt out.
+bash update-ubuntu.sh
+```
+
+Toggle individual steps in each script's `PARAMETERS` block (or via `--skip-*`
+flags / env vars on Ubuntu).
 
 ## System requirements
 
@@ -107,5 +129,6 @@ Both scripts have a `PARAMETERS` section at the very top — edit values there b
 |---|---|
 | Windows | Windows 10/11 (Home, Pro, or Enterprise) |
 | RAM | 16 GB recommended (scripts allocate 75% to WSL) |
+| Dev Drive | ReFS Dev Drive at `D:` needs Windows 11 22H2 (build 22621.2338+); older builds fall back to an NTFS volume automatically |
 | WSL networking | `networkingMode=mirrored` requires Windows 11 22H2+ |
 | Systemd in WSL | Requires Windows 11 22H2+ / WSL 2.0 |
