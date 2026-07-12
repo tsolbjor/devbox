@@ -40,8 +40,8 @@ KUBECTL_VERSION="${KUBECTL_VERSION:-v1.32}"   # Kubernetes minor version for apt
 INSTALL_HELM="${INSTALL_HELM:-true}"
 INSTALL_K9S="${INSTALL_K9S:-true}"
 INSTALL_KUBECTX="${INSTALL_KUBECTX:-true}"
-INSTALL_OH_MY_POSH="${INSTALL_OH_MY_POSH:-true}"
-OH_MY_POSH_THEME="${OH_MY_POSH_THEME:-jandedobbeleer}"   # name from https://ohmyposh.dev/docs/themes
+INSTALL_STARSHIP="${INSTALL_STARSHIP:-true}"
+STARSHIP_PRESET="${STARSHIP_PRESET:-nerd-font-symbols}"   # `starship preset --list`; empty keeps the built-in default
 INSTALL_NODE="${INSTALL_NODE:-true}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"   # LTS; https://nodejs.org/en/about/previous-releases
 CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-true}"   # set false on native Linux (not WSL)
@@ -346,13 +346,13 @@ ensure_node() {
   fi
 }
 
-ensure_oh_my_posh() {
+ensure_starship() {
   # Install binary
-  if ensure_command oh-my-posh; then
-    echo "✓ oh-my-posh already installed"
+  if ensure_command starship; then
+    echo "✓ starship already installed"
   else
-    echo "→ Installing oh-my-posh"
-    curl -fsSL https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin"
+    echo "→ Installing starship"
+    curl -fsSL https://starship.rs/install.sh | sh -s -- --yes --bin-dir "$HOME/.local/bin"
     # Ensure ~/.local/bin is on PATH in all present shell rc files (idempotent)
     for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
       if [[ -f "$rc" ]] && ! grep -q '\.local/bin' "$rc"; then
@@ -362,31 +362,32 @@ ensure_oh_my_posh() {
     done
   fi
 
-  # Download theme
-  local config_dir="$HOME/.config/oh-my-posh"
-  local theme_file="$config_dir/theme.omp.json"
-  if [[ -f "$theme_file" ]]; then
-    echo "✓ oh-my-posh theme already present: $theme_file"
-  else
-    echo "→ Downloading oh-my-posh theme: $OH_MY_POSH_THEME"
+  # Apply a preset once — never clobber an existing starship.toml the user may have edited
+  local config_dir="$HOME/.config"
+  local config_file="$config_dir/starship.toml"
+  if [[ -f "$config_file" ]]; then
+    echo "✓ starship config already present: $config_file"
+  elif [[ -n "$STARSHIP_PRESET" ]]; then
+    echo "→ Applying starship preset: $STARSHIP_PRESET"
     mkdir -p "$config_dir"
-    curl -fsSL "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/${OH_MY_POSH_THEME}.omp.json" \
-      -o "$theme_file"
-    echo "✓ Theme saved to $theme_file"
+    # starship lives in ~/.local/bin, which may not be on PATH in this non-login shell yet
+    if ! ensure_command starship; then export PATH="$HOME/.local/bin:$PATH"; fi
+    starship preset "$STARSHIP_PRESET" -o "$config_file"
+    echo "✓ Preset saved to $config_file"
   fi
 
-  # Wire init into shell rc files (idempotent)
-  if [[ -f "$HOME/.bashrc" ]] && ! grep -q 'oh-my-posh' "$HOME/.bashrc"; then
-    echo "→ Adding oh-my-posh init to .bashrc"
-    printf '\neval "$(oh-my-posh init bash --config ~/.config/oh-my-posh/theme.omp.json)"\n' >> "$HOME/.bashrc"
+  # Wire init into shell rc files (idempotent; starship init must run last, so append)
+  if [[ -f "$HOME/.bashrc" ]] && ! grep -q 'starship init' "$HOME/.bashrc"; then
+    echo "→ Adding starship init to .bashrc"
+    printf '\neval "$(starship init bash)"\n' >> "$HOME/.bashrc"
   elif [[ -f "$HOME/.bashrc" ]]; then
-    echo "✓ oh-my-posh already in .bashrc"
+    echo "✓ starship already in .bashrc"
   fi
-  if [[ -f "$HOME/.zshrc" ]] && ! grep -q 'oh-my-posh' "$HOME/.zshrc"; then
-    echo "→ Adding oh-my-posh init to .zshrc"
-    printf '\neval "$(oh-my-posh init zsh --config ~/.config/oh-my-posh/theme.omp.json)"\n' >> "$HOME/.zshrc"
+  if [[ -f "$HOME/.zshrc" ]] && ! grep -q 'starship init' "$HOME/.zshrc"; then
+    echo "→ Adding starship init to .zshrc"
+    printf '\neval "$(starship init zsh)"\n' >> "$HOME/.zshrc"
   elif [[ -f "$HOME/.zshrc" ]]; then
-    echo "✓ oh-my-posh already in .zshrc"
+    echo "✓ starship already in .zshrc"
   fi
 }
 
@@ -476,7 +477,7 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
 [[ "$INSTALL_HELM"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_K9S"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_KUBECTX"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
-[[ "$INSTALL_OH_MY_POSH" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_STARSHIP"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_NODE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_DOTNET"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_PYTHON"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -497,7 +498,7 @@ if [[ "$CONFIGURE_WSL_CONF" == "true" ]]; then
 fi
 
 log "Setting up zsh"
-# Ensure .zshrc exists so later sections (fd PATH, fzf, oh-my-posh) can write to it
+# Ensure .zshrc exists so later sections (fd PATH, fzf, starship) can write to it
 if is_pkg_installed zsh; then
   if [[ ! -f "$HOME/.zshrc" ]]; then
     echo "→ Creating minimal ~/.zshrc"
@@ -594,9 +595,9 @@ if [[ "$INSTALL_KUBECTX" == "true" ]]; then
   ensure_kubectx
 fi
 
-if [[ "$INSTALL_OH_MY_POSH" == "true" ]]; then
-  log "Installing oh-my-posh"
-  ensure_oh_my_posh
+if [[ "$INSTALL_STARSHIP" == "true" ]]; then
+  log "Installing starship"
+  ensure_starship
 fi
 
 if [[ "$INSTALL_NODE" == "true" ]]; then

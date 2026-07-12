@@ -6,7 +6,7 @@ set -euo pipefail
 # =========================
 
 UPDATE_APT="${UPDATE_APT:-true}"
-UPDATE_OH_MY_POSH="${UPDATE_OH_MY_POSH:-true}"
+UPDATE_STARSHIP="${UPDATE_STARSHIP:-true}"
 UPDATE_K9S="${UPDATE_K9S:-true}"
 UPDATE_KUBECTX="${UPDATE_KUBECTX:-true}"
 UPDATE_NPM_GLOBALS="${UPDATE_NPM_GLOBALS:-true}"   # npm update -g if npm is available
@@ -21,7 +21,7 @@ usage() {
 Usage: update-ubuntu.sh [options]
 
   --skip-apt           Skip apt update/upgrade
-  --skip-oh-my-posh    Skip oh-my-posh update
+  --skip-starship      Skip starship update
   --skip-k9s           Skip k9s update
   --skip-kubectx       Skip kubectx/kubens update
   --skip-npm-globals   Skip global npm package update
@@ -33,7 +33,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-apt)          UPDATE_APT=false ;;
-    --skip-oh-my-posh)   UPDATE_OH_MY_POSH=false ;;
+    --skip-starship)     UPDATE_STARSHIP=false ;;
     --skip-k9s)          UPDATE_K9S=false ;;
     --skip-kubectx)      UPDATE_KUBECTX=false ;;
     --skip-npm-globals)  UPDATE_NPM_GLOBALS=false ;;
@@ -85,20 +85,20 @@ update_apt() {
   echo "✓ apt packages up to date"
 }
 
-update_oh_my_posh() {
-  if ! ensure_command oh-my-posh; then
-    echo "✓ oh-my-posh not installed, skipping"
+update_starship() {
+  if ! ensure_command starship; then
+    echo "✓ starship not installed, skipping"
     return
   fi
   local before after
-  before=$(oh-my-posh --version 2>/dev/null || echo "?")
-  echo "→ Updating oh-my-posh (current: $before)"
-  curl -fsSL https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin"
-  after=$(oh-my-posh --version 2>/dev/null || echo "?")
+  before=$(starship --version 2>/dev/null | head -1 || echo "?")
+  echo "→ Updating starship (current: $before)"
+  curl -fsSL https://starship.rs/install.sh | sh -s -- --yes --bin-dir "$HOME/.local/bin"
+  after=$(starship --version 2>/dev/null | head -1 || echo "?")
   if [[ "$before" == "$after" ]]; then
-    echo "✓ oh-my-posh already at latest ($after)"
+    echo "✓ starship already at latest ($after)"
   else
-    echo "✓ oh-my-posh updated: $before → $after"
+    echo "✓ starship updated: $before → $after"
   fi
 }
 
@@ -174,14 +174,14 @@ update_pipx() {
 
 TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_APT"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
-[[ "$UPDATE_OH_MY_POSH"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_STARSHIP"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_K9S"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_KUBECTX"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_NPM_GLOBALS"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_PIPX"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 
 [[ "$UPDATE_APT"         == "true" ]] && run_step "Updating apt packages"      --skip-apt          update_apt
-[[ "$UPDATE_OH_MY_POSH"  == "true" ]] && run_step "Updating oh-my-posh"        --skip-oh-my-posh   update_oh_my_posh
+[[ "$UPDATE_STARSHIP"    == "true" ]] && run_step "Updating starship"          --skip-starship     update_starship
 [[ "$UPDATE_K9S"         == "true" ]] && run_step "Updating k9s"               --skip-k9s          update_k9s
 [[ "$UPDATE_KUBECTX"     == "true" ]] && run_step "Updating kubectx/kubens"    --skip-kubectx      update_kubectx
 [[ "$UPDATE_NPM_GLOBALS" == "true" ]] && run_step "Updating global npm packages" --skip-npm-globals update_npm_globals

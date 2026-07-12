@@ -27,14 +27,14 @@ Installs and configures:
 
 | Category | What gets set up |
 |---|---|
-| Apps | Windows Terminal, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip |
+| Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip |
 | Fonts | Cascadia Code, JetBrains Mono Nerd Font |
 | Cloud CLIs | Azure CLI, AWS CLI, Google Cloud SDK |
 | VS Code | Remote WSL, Dev Containers, Docker extensions |
 | WSL | Ubuntu distro, resource limits (75% RAM/CPU), mirrored networking, swap disabled |
 | Rancher Desktop | moby engine (Docker-compatible), Kubernetes enabled |
-| Windows Terminal | JetBrains Mono font, One Half Dark theme, bar cursor, bell off |
-| PowerShell prompt | Oh My Posh (jandedobbeleer theme) for PS5 and PS7 |
+| WezTerm | JetBrains Mono Nerd Font, One Half Dark scheme, bar cursor, bell off; opens Ubuntu by default; Ctrl+Shift+1/2/3 switch cmd / pwsh (D:\code) / Ubuntu |
+| PowerShell prompt | Starship (nerd-font-symbols preset) for PS5 and PS7 |
 | System | Long path support, OpenSSH Agent, Defender exclusion for WSL vhdx |
 | Git | autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote |
 
@@ -60,7 +60,7 @@ Installs and configures:
 
 | Category | What gets set up |
 |---|---|
-| Shell | zsh (set as default), Oh My Posh, fzf with key bindings |
+| Shell | zsh (set as default), Starship, fzf with key bindings |
 | Dev tools | git, build-essential, ripgrep, fd, jq, wget, zip, GitHub CLI, Node.js |
 | Languages | .NET SDK, Python (venv/pip/pipx/uv) |
 | Kubernetes | kubectl, helm, k9s, kubectx, kubens |
@@ -75,9 +75,9 @@ After the script finishes it prints your SSH public key and next steps.
 
 Both scripts have a `PARAMETERS` section at the very top — edit values there before running. No changes to the implementation section are needed for common adjustments.
 
-**Windows** — remove entries from `Fonts`, `CloudCLIs`, or `VSCodeExtensions`; change the Oh My Posh theme; override `WslConfig` memory/CPU values explicitly instead of auto-detecting.
+**Windows** — remove entries from `Fonts`, `CloudCLIs`, or `VSCodeExtensions`; change the `Starship.Preset` or the `WezTermConfig` appearance/`PwshStartDir`; override `WslConfig` memory/CPU values explicitly instead of auto-detecting.
 
-**Ubuntu** — set `INSTALL_KUBECTL=false` to skip Kubernetes tools; toggle `INSTALL_DOTNET` / `INSTALL_PYTHON` (or pin `DOTNET_SDK_VERSION`); set `GIT_SIGN_COMMITS=false` to skip SSH commit signing; change `OH_MY_POSH_THEME` to any name from [ohmyposh.dev/docs/themes](https://ohmyposh.dev/docs/themes); set `WSL_ENABLE_SYSTEMD=false` on older Windows builds.
+**Ubuntu** — set `INSTALL_KUBECTL=false` to skip Kubernetes tools; toggle `INSTALL_DOTNET` / `INSTALL_PYTHON` (or pin `DOTNET_SDK_VERSION`); set `GIT_SIGN_COMMITS=false` to skip SSH commit signing; change `STARSHIP_PRESET` to any name from [starship.rs/presets](https://starship.rs/presets/) (or empty for the built-in default); set `WSL_ENABLE_SYSTEMD=false` on older Windows builds.
 
 ## System requirements
 

@@ -4,7 +4,8 @@
 
 $Config = @{
   # Apps
-  InstallWindowsTerminal = $true
+  InstallWezTerm         = $true
+  InstallPowerShell7     = $true   # pwsh — used by the WezTerm launcher + Starship pwsh profile
   InstallVSCode          = $true
   InstallRancherDesktop  = $true
   InstallGit             = $true
@@ -22,10 +23,10 @@ $Config = @{
   InstallNode            = $true   # host Node for npm-global tooling (CDK, etc.)
   InstallAzureFunctionsCoreTools = $true   # `func` CLI via winget (self-updates on `winget upgrade`)
 
-  # Oh My Posh — prompt theme engine; configures PowerShell profiles for PS5 and PS7
-  OhMyPosh = @{
+  # Starship — cross-shell prompt engine; configures PowerShell profiles for PS5 and PS7
+  Starship = @{
     Configure = $true
-    Theme     = "jandedobbeleer"   # name from https://ohmyposh.dev/docs/themes
+    Preset    = "nerd-font-symbols"   # `starship preset --list`; "" keeps starship's built-in default
   }
 
   # Fonts (winget IDs)
@@ -39,8 +40,8 @@ $Config = @{
     "Microsoft.AzureCLI"
   )
 
-  # Windows Terminal profile defaults (applied to all profiles via profiles.defaults)
-  WindowsTerminalConfig = @{
+  # WezTerm appearance — written to a managed ~/.wezterm.lua (overwritten on rerun)
+  WezTermConfig = @{
     Configure          = $true
     FontPackageId      = "NERD-Fonts.JetBrainsMono"
     FontDownloadUrl    = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.zip"
@@ -53,21 +54,20 @@ $Config = @{
       "JetBrainsMono NF"
     )
     FontSize           = 12
-    ColorScheme        = "One Half Dark"      # built-in scheme, good contrast
-    CursorShape        = "bar"                # "bar", "vintage", "underscore", "filledBox", "emptyBox"
-    BellStyle          = "none"
-    HistorySize        = 30000
-    # Tab contrast: active tab matches terminal bg; inactive tabs and tab row are darker
-    ThemeName          = "devbox"
-    ThemeTabActive     = "#282C34"   # One Half Dark background — selected tab appears open
-    ThemeTabInactive   = "#1A1D23"   # ~35% darker — inactive tabs and tab row recede
+    ColorScheme        = "OneHalfDark"   # built-in WezTerm scheme (matches the old One Half Dark)
+    CursorStyle        = "SteadyBar"     # "SteadyBar", "BlinkingBar", "SteadyBlock", "SteadyUnderline", ...
+    AudibleBell        = "Disabled"      # "Disabled" or "SystemBeep"
+    ScrollbackLines    = 30000
+    # Quick shell-switching: the (+) tab-bar dropdown lists these, and Ctrl+Shift+1/2/3
+    # spawn cmd / pwsh / Ubuntu directly. Ctrl+Shift+L opens the launcher menu.
+    PwshStartDir       = "D:\code"       # pwsh (Ctrl+Shift+2) opens here
   }
 
   # WSL / Ubuntu
   EnsureWSL              = $true
   WslDefaultVersion      = 2
   UbuntuDistroName       = "Ubuntu"   # e.g. "Ubuntu", "Ubuntu-22.04", "Ubuntu-24.04"
-  SetUbuntuAsDefaultInWindowsTerminal = $true
+  SetWslAsDefaultInWezTerm = $true    # WezTerm opens the WSL distro by default (WSL:<distro> domain)
 
   # WSL resource limits (writes ~/.wslconfig on Windows side).
   # Set memory/processors/swap to $null to auto-detect (75% of system resources;
@@ -203,7 +203,7 @@ function Get-InstalledFontFamilies {
   return $fontFamilies | Select-Object -Unique
 }
 
-function Resolve-WindowsTerminalFontFace {
+function Resolve-InstalledFontFace {
   param(
     [Parameter(Mandatory=$true)][string]$PreferredFontFace
   )
@@ -228,13 +228,13 @@ function Resolve-WindowsTerminalFontFace {
   foreach ($candidate in $candidates) {
     if ($installedFonts -contains $candidate) {
       if ($candidate -ne $PreferredFontFace) {
-        Write-Warning "Windows Terminal font '$PreferredFontFace' is not installed. Using '$candidate' instead."
+        Write-Warning "Font '$PreferredFontFace' is not installed. Using '$candidate' instead."
       }
       return $candidate
     }
   }
 
-  Write-Warning "None of the preferred Terminal fonts were found. Leaving font face as '$PreferredFontFace'."
+  Write-Warning "None of the preferred fonts were found. Leaving font face as '$PreferredFontFace'."
   return $PreferredFontFace
 }
 
@@ -263,7 +263,7 @@ function Ensure-FontPackageRegistered {
   }
 
   Write-Warning "Installed '$PackageId', but Windows did not register any expected font family: $($FontFaces -join ', ')."
-  Write-Warning "A sign out or reboot may still be required before Windows Terminal can use the new font."
+  Write-Warning "A sign out or reboot may still be required before apps can use the new font."
   return $null
 }
 
@@ -361,7 +361,7 @@ function Install-NerdFontArchive {
   }
 
   Write-Warning "Installed font files for '$PackageId', but Windows did not register any expected font family: $($FontFaces -join ', ')."
-  Write-Warning "A sign out or reboot may still be required before Windows Terminal can use the new font."
+  Write-Warning "A sign out or reboot may still be required before apps can use the new font."
   return $null
 }
 
@@ -420,7 +420,7 @@ function Ensure-WSL {
   This is a multi-pass setup on a fresh machine:
     PASS 1 (done)  Enabled WSL features / started distro install.
     -> REBOOT NOW, then rerun this script (PASS 2).
-    PASS 2         Finishes distro install + Windows Terminal / Rancher / Defender config.
+    PASS 2         Finishes distro install + WezTerm / Rancher / Defender config.
                    (App config steps warn-and-skip until each app has launched once.)
     THEN           Launch Ubuntu once to create your UNIX user, then inside WSL run:
                      bash setup-ubuntu.sh
@@ -467,229 +467,127 @@ function Ensure-WSLConfigFile {
   }
 }
 
-function Get-WindowsTerminalSettingsPath {
-  $candidates = @(
-    (Join-Path -Path $env:LOCALAPPDATA -ChildPath "Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json")
-    (Join-Path -Path $env:LOCALAPPDATA -ChildPath "Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json")
-  )
-  foreach ($p in $candidates) {
-    if (Test-Path $p) { return $p }
+function Ensure-StarshipPowerShell {
+  param([string]$Preset)
+
+  Install-WingetPackage -Id "Starship.Starship"
+
+  # Refresh PATH so `starship` is callable in this session after a fresh install
+  $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+              [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+  # Apply a preset once — never clobber an existing starship.toml the user may have edited
+  if ($Preset) {
+    $cfgDir  = Join-Path $env:USERPROFILE ".config"
+    $cfgPath = Join-Path $cfgDir "starship.toml"
+    if (Test-Path $cfgPath) {
+      Write-Host "✓ starship.toml already present: $cfgPath" -ForegroundColor Green
+    } elseif (Test-Command "starship") {
+      if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null }
+      Write-Host "→ Applying starship preset '$Preset': $cfgPath" -ForegroundColor Cyan
+      starship preset $Preset -o $cfgPath
+      Write-Host "✓ starship preset applied." -ForegroundColor Green
+    } else {
+      Write-Warning "starship not on PATH yet — open a new terminal and run: starship preset $Preset -o `"$cfgPath`""
+    }
   }
-  return $null
-}
-
-function Ensure-WindowsTerminalDefaultProfileUbuntu {
-  param(
-    [Parameter(Mandatory=$true)][string]$UbuntuName
-  )
-
-  $settingsPath = Get-WindowsTerminalSettingsPath
-  if (-not $settingsPath) {
-    Write-Warning "Windows Terminal settings.json not found yet. Open Windows Terminal once, then rerun."
-    return
-  }
-
-  $json = Get-Content $settingsPath -Raw | ConvertFrom-Json
-
-  # Find an Ubuntu profile (name contains UbuntuName)
-  $profiles = $json.profiles.list
-  $ubuntu = $profiles | Where-Object { $_.name -like "*$UbuntuName*" } | Select-Object -First 1
-
-  if (-not $ubuntu) {
-    Write-Warning "Could not find a Windows Terminal profile matching '*$UbuntuName*'. Skipping defaultProfile change."
-    return
-  }
-
-  if ($json.defaultProfile -eq $ubuntu.guid) {
-    Write-Host "✓ Windows Terminal default profile already set to: $($ubuntu.name)" -ForegroundColor Green
-    return
-  }
-
-  Write-Host "→ Setting Windows Terminal default profile to: $($ubuntu.name)" -ForegroundColor Cyan
-  $json.defaultProfile = $ubuntu.guid
-
-  # Preserve formatting reasonably
-  ($json | ConvertTo-Json -Depth 50) | Set-Content -Path $settingsPath -Encoding UTF8
-  Write-Host "✓ Updated Windows Terminal default profile." -ForegroundColor Green
-}
-
-function Ensure-OhMyPoshPowerShell {
-  param([Parameter(Mandatory=$true)][string]$Theme)
-
-  Install-WingetPackage -Id "JanDeDobbeleer.OhMyPosh"
 
   $docs = [Environment]::GetFolderPath("MyDocuments")
   $targets = @(
-    @{ Profile = Join-Path $docs "WindowsPowerShell\Microsoft.PowerShell_profile.ps1"; Shell = "powershell" }
-    @{ Profile = Join-Path $docs "PowerShell\Microsoft.PowerShell_profile.ps1";        Shell = "pwsh" }
+    @{ Profile = Join-Path $docs "WindowsPowerShell\Microsoft.PowerShell_profile.ps1"; Exe = "powershell" }
+    @{ Profile = Join-Path $docs "PowerShell\Microsoft.PowerShell_profile.ps1";        Exe = "pwsh" }
   )
 
   foreach ($t in $targets) {
-    $exe = if ($t.Shell -eq "pwsh") { "pwsh" } else { "powershell" }
-    if (-not (Test-Command $exe)) { continue }
+    if (-not (Test-Command $t.Exe)) { continue }
 
     $dir = Split-Path $t.Profile
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
 
     $content = if (Test-Path $t.Profile) { Get-Content $t.Profile -Raw } else { "" }
-    if ($content -match "oh-my-posh") {
-      Write-Host "✓ oh-my-posh already in: $($t.Profile)" -ForegroundColor Green
+    if ($content -match "starship init") {
+      Write-Host "✓ starship already in: $($t.Profile)" -ForegroundColor Green
       continue
     }
 
-    # Write literal $env:POSH_THEMES_PATH so it expands at shell startup, not now
-    $initLine = "oh-my-posh init $($t.Shell) --config `"`$env:POSH_THEMES_PATH\$Theme.omp.json`" | Invoke-Expression"
-    Write-Host "→ Adding oh-my-posh to: $($t.Profile)" -ForegroundColor Cyan
+    $initLine = 'Invoke-Expression (&starship init powershell)'
+    Write-Host "→ Adding starship to: $($t.Profile)" -ForegroundColor Cyan
     if ($content) {
       Add-Content -Path $t.Profile -Value "`n$initLine" -Encoding UTF8
     } else {
       Set-Content -Path $t.Profile -Value $initLine -Encoding UTF8
     }
-    Write-Host "✓ oh-my-posh configured in: $($t.Profile)" -ForegroundColor Green
+    Write-Host "✓ starship configured in: $($t.Profile)" -ForegroundColor Green
   }
 }
 
-function Ensure-WindowsTerminalProfileDefaults {
-  param($WtConfig)
+function Ensure-WezTermConfig {
+  param(
+    [Parameter(Mandatory=$true)]$WtConfig,
+    [string]$WslDistro = "Ubuntu",   # WSL distro used by the Ubuntu launcher entry / Ctrl+Shift+3
+    [bool]$MakeWslDefault = $true     # open the WSL distro by default
+  )
 
-  $settingsPath = Get-WindowsTerminalSettingsPath
-  if (-not $settingsPath) {
-    Write-Warning "Windows Terminal settings.json not found. Open Windows Terminal once, then rerun."
-    return
-  }
+  $resolvedFontFace = Resolve-InstalledFontFace -PreferredFontFace $WtConfig.FontFace
 
-  $json = Get-Content $settingsPath -Raw | ConvertFrom-Json
-  $changed = $false
-  $resolvedFontFace = Resolve-WindowsTerminalFontFace -PreferredFontFace $WtConfig.FontFace
+  # Nerd Font fallback list: resolved face first, then the configured candidates
+  $faces = @($resolvedFontFace) + $WtConfig.FontFaceCandidates | Select-Object -Unique
+  $fontList = ($faces | ForEach-Object { "'" + $_ + "'" }) -join ", "
 
-  # Ensure profiles.defaults path exists
-  if ($null -eq $json.profiles) {
-    $json | Add-Member -NotePropertyName "profiles" -NotePropertyValue ([PSCustomObject]@{}) -Force
-  }
-  if ($null -eq $json.profiles.defaults) {
-    $json.profiles | Add-Member -NotePropertyName "defaults" -NotePropertyValue ([PSCustomObject]@{}) -Force
-  }
-  $d = $json.profiles.defaults
-
-  # Font (nested object)
-  if ($null -eq $d.font -or $d.font -isnot [psobject]) {
-    $d | Add-Member -NotePropertyName "font" -NotePropertyValue ([PSCustomObject]@{}) -Force
-  }
-  $currentFontFaceProp = $d.font.PSObject.Properties["face"]
-  $currentFontFace = if ($null -ne $currentFontFaceProp) { $currentFontFaceProp.Value } else { $null }
-  if ($currentFontFace -ne $resolvedFontFace) {
-    $d.font | Add-Member -NotePropertyName "face" -NotePropertyValue $resolvedFontFace -Force
-    $changed = $true
-  }
-  $currentFontSizeProp = $d.font.PSObject.Properties["size"]
-  $currentFontSize = if ($null -ne $currentFontSizeProp) { $currentFontSizeProp.Value } else { $null }
-  if ($currentFontSize -ne $WtConfig.FontSize) {
-    $d.font | Add-Member -NotePropertyName "size" -NotePropertyValue $WtConfig.FontSize -Force
-    $changed = $true
-  }
-
-  # Flat settings
-  foreach ($pair in @(
-    @{ Key = "colorScheme"; Val = $WtConfig.ColorScheme },
-    @{ Key = "cursorShape"; Val = $WtConfig.CursorShape },
-    @{ Key = "bellStyle";   Val = $WtConfig.BellStyle },
-    @{ Key = "historySize"; Val = $WtConfig.HistorySize }
-  )) {
-    $currentProp = $d.PSObject.Properties[$pair.Key]
-    $currentVal = if ($null -ne $currentProp) { $currentProp.Value } else { $null }
-    if ($currentVal -ne $pair.Val) {
-      $d | Add-Member -NotePropertyName $pair.Key -NotePropertyValue $pair.Val -Force
-      $changed = $true
-    }
-  }
-
-  if ($changed) {
-    Write-Host "→ Updating Windows Terminal profile defaults: $settingsPath" -ForegroundColor Cyan
-    ($json | ConvertTo-Json -Depth 50) | Set-Content -Path $settingsPath -Encoding UTF8
-    Write-Host "✓ Windows Terminal profile defaults configured." -ForegroundColor Green
+  $domainLine = if ($MakeWslDefault) {
+    "config.default_domain = 'WSL:$WslDistro'"
   } else {
-    Write-Host "✓ Windows Terminal profile defaults already match desired settings." -ForegroundColor Green
+    "-- config.default_domain left unset (opens the local Windows shell)"
   }
+
+  # Lua string literals need backslashes doubled (D:\code -> D:\\code)
+  $pwshDirLua = $WtConfig.PwshStartDir -replace '\\', '\\'
+
+  $lua = @"
+-- Managed by devbox setup-windows.ps1 — edits here are overwritten on rerun.
+-- To customise permanently, change the WezTermConfig block in setup-windows.ps1.
+local wezterm = require 'wezterm'
+local act = wezterm.action
+local config = wezterm.config_builder()
+
+$domainLine
+config.font = wezterm.font_with_fallback({ $fontList })
+config.font_size = $($WtConfig.FontSize)
+config.color_scheme = '$($WtConfig.ColorScheme)'
+config.default_cursor_style = '$($WtConfig.CursorStyle)'
+config.audible_bell = '$($WtConfig.AudibleBell)'
+config.scrollback_lines = $($WtConfig.ScrollbackLines)
+config.hide_tab_bar_if_only_one_tab = true
+config.warn_about_missing_glyphs = false
+
+-- Quick shell-switching. These appear in the (+) tab-bar dropdown / launcher,
+-- and Ctrl+Shift+1/2/3 spawn them directly. Ctrl+Shift+L opens the launcher.
+config.launch_menu = {
+  { label = 'cmd',    args = { 'cmd.exe' } },
+  { label = 'pwsh',   args = { 'pwsh.exe' }, cwd = '$pwshDirLua' },
+  { label = 'Ubuntu', domain = { DomainName = 'WSL:$WslDistro' } },
 }
 
-function Ensure-WindowsTerminalTheme {
-  param($WtConfig)
+config.keys = {
+  { key = '1', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'cmd.exe' } } },
+  { key = '2', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'pwsh.exe' }, cwd = '$pwshDirLua' } },
+  { key = '3', mods = 'CTRL|SHIFT', action = act.SpawnTab { DomainName = 'WSL:$WslDistro' } },
+  { key = 'l', mods = 'CTRL|SHIFT', action = act.ShowLauncher },
+}
 
-  $settingsPath = Get-WindowsTerminalSettingsPath
-  if (-not $settingsPath) {
-    Write-Warning "Windows Terminal settings.json not found. Open Windows Terminal once, then rerun."
-    return
-  }
+return config
+"@
 
-  $json = Get-Content $settingsPath -Raw | ConvertFrom-Json
-  $changed = $false
+  $path = Join-Path $env:USERPROFILE ".wezterm.lua"
+  $desiredText = (($lua -replace "`r`n", "`n").TrimEnd()) + "`n"
+  $current = if (Test-Path $path) { ((Get-Content $path -Raw) -replace "`r`n", "`n") } else { "" }
 
-  # Ensure top-level themes array exists
-  if ($null -eq $json.PSObject.Properties["themes"]) {
-    $json | Add-Member -NotePropertyName "themes" -NotePropertyValue @() -Force
-  }
-
-  # Find or create our named theme entry
-  $theme = @($json.themes) | Where-Object { $_.name -eq $WtConfig.ThemeName } | Select-Object -First 1
-  if ($null -eq $theme) {
-    $theme = [PSCustomObject]@{ name = $WtConfig.ThemeName }
-    $json.themes = @($json.themes) + @($theme)
-    $changed = $true
-  }
-
-  # tab: active tab bg, inactive tab bg
-  if ($null -eq $theme.PSObject.Properties["tab"]) {
-    $theme | Add-Member -NotePropertyName "tab" -NotePropertyValue ([PSCustomObject]@{}) -Force
-  }
-  foreach ($pair in @(
-    @{ Key = "background";          Val = $WtConfig.ThemeTabActive },
-    @{ Key = "unfocusedBackground"; Val = $WtConfig.ThemeTabInactive }
-  )) {
-    $p = $theme.tab.PSObject.Properties[$pair.Key]
-    if ($null -eq $p -or $p.Value -ne $pair.Val) {
-      $theme.tab | Add-Member -NotePropertyName $pair.Key -NotePropertyValue $pair.Val -Force
-      $changed = $true
-    }
-  }
-
-  # tabRow: background behind all tabs
-  if ($null -eq $theme.PSObject.Properties["tabRow"]) {
-    $theme | Add-Member -NotePropertyName "tabRow" -NotePropertyValue ([PSCustomObject]@{}) -Force
-  }
-  foreach ($pair in @(
-    @{ Key = "background";          Val = $WtConfig.ThemeTabInactive },
-    @{ Key = "unfocusedBackground"; Val = $WtConfig.ThemeTabInactive }
-  )) {
-    $p = $theme.tabRow.PSObject.Properties[$pair.Key]
-    if ($null -eq $p -or $p.Value -ne $pair.Val) {
-      $theme.tabRow | Add-Member -NotePropertyName $pair.Key -NotePropertyValue $pair.Val -Force
-      $changed = $true
-    }
-  }
-
-  # window: lock to dark application theme
-  if ($null -eq $theme.PSObject.Properties["window"]) {
-    $theme | Add-Member -NotePropertyName "window" -NotePropertyValue ([PSCustomObject]@{}) -Force
-  }
-  $p = $theme.window.PSObject.Properties["applicationTheme"]
-  if ($null -eq $p -or $p.Value -ne "dark") {
-    $theme.window | Add-Member -NotePropertyName "applicationTheme" -NotePropertyValue "dark" -Force
-    $changed = $true
-  }
-
-  # Activate the theme at the top level
-  $p = $json.PSObject.Properties["theme"]
-  if ($null -eq $p -or $p.Value -ne $WtConfig.ThemeName) {
-    $json | Add-Member -NotePropertyName "theme" -NotePropertyValue $WtConfig.ThemeName -Force
-    $changed = $true
-  }
-
-  if ($changed) {
-    Write-Host "→ Applying Windows Terminal theme '$($WtConfig.ThemeName)': $settingsPath" -ForegroundColor Cyan
-    ($json | ConvertTo-Json -Depth 50) | Set-Content -Path $settingsPath -Encoding UTF8
-    Write-Host "✓ Tab contrast configured (active: $($WtConfig.ThemeTabActive), inactive: $($WtConfig.ThemeTabInactive))" -ForegroundColor Green
+  if ($current -ne $desiredText) {
+    Write-Host "→ Writing WezTerm config: $path" -ForegroundColor Cyan
+    Set-Content -Path $path -Value $desiredText -Encoding UTF8 -NoNewline
+    Write-Host "✓ WezTerm configured (font: $resolvedFontFace, scheme: $($WtConfig.ColorScheme))." -ForegroundColor Green
   } else {
-    Write-Host "✓ Windows Terminal theme '$($WtConfig.ThemeName)' already matches desired settings" -ForegroundColor Green
+    Write-Host "✓ WezTerm config already matches desired settings." -ForegroundColor Green
   }
 }
 
@@ -912,8 +810,8 @@ Ensure-Winget
 $totalSteps = 4  # always: detect resources, install apps, configure WSL, apply system settings
 if ($Config.Fonts.Count -gt 0)    { $totalSteps++ }
 if ($Config.CloudCLIs.Count -gt 0) { $totalSteps++ }
-if (($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) -or $Config.WindowsTerminalConfig.Configure) { $totalSteps++ }
-if ($Config.OhMyPosh.Configure)   { $totalSteps++ }
+if ($Config.WezTermConfig.Configure) { $totalSteps++ }
+if ($Config.Starship.Configure)   { $totalSteps++ }
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) { $totalSteps++ }
 if ($Config.RancherDesktopConfig.Configure) { $totalSteps++ }
 $script:totalSteps = $totalSteps
@@ -932,7 +830,8 @@ if (-not $Config.RancherDesktopConfig.memoryInGB) { $Config.RancherDesktopConfig
 if (-not $Config.RancherDesktopConfig.numberCPUs) { $Config.RancherDesktopConfig.numberCPUs = $alloc.CPUs }
 
 Show-Progress "Installing apps"
-if ($Config.InstallWindowsTerminal) { Install-WingetPackage -Id "Microsoft.WindowsTerminal" }
+if ($Config.InstallWezTerm)         { Install-WingetPackage -Id "wez.wezterm" }
+if ($Config.InstallPowerShell7)     { Install-WingetPackage -Id "Microsoft.PowerShell" }
 if ($Config.InstallVSCode)          { Install-WingetPackage -Id "Microsoft.VisualStudioCode" }
 if ($Config.InstallRancherDesktop)  { Install-WingetPackage -Id "SUSE.RancherDesktop" }
 if ($Config.InstallGit) {
@@ -948,16 +847,16 @@ if ($Config.Fonts.Count -gt 0) {
   Show-Progress "Installing fonts"
   foreach ($font in $Config.Fonts) {
     if (
-      $Config.WindowsTerminalConfig.Configure -and
-      $font -eq $Config.WindowsTerminalConfig.FontPackageId -and
-      $Config.WindowsTerminalConfig.FontFaceCandidates.Count -gt 0 -and
-      $Config.WindowsTerminalConfig.FontDownloadUrl
+      $Config.WezTermConfig.Configure -and
+      $font -eq $Config.WezTermConfig.FontPackageId -and
+      $Config.WezTermConfig.FontFaceCandidates.Count -gt 0 -and
+      $Config.WezTermConfig.FontDownloadUrl
     ) {
       Install-NerdFontArchive `
         -PackageId $font `
-        -DownloadUrl $Config.WindowsTerminalConfig.FontDownloadUrl `
-        -FontFaces $Config.WindowsTerminalConfig.FontFaceCandidates `
-        -ArchiveFilter $Config.WindowsTerminalConfig.FontArchiveFilter | Out-Null
+        -DownloadUrl $Config.WezTermConfig.FontDownloadUrl `
+        -FontFaces $Config.WezTermConfig.FontFaceCandidates `
+        -ArchiveFilter $Config.WezTermConfig.FontArchiveFilter | Out-Null
       continue
     }
 
@@ -976,20 +875,16 @@ if ($Config.EnsureWSL) {
 }
 Ensure-WSLConfigFile -WslConfig $Config.WslConfig
 
-if (($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) -or $Config.WindowsTerminalConfig.Configure) {
-  Show-Progress "Configuring Windows Terminal"
-  if ($Config.SetUbuntuAsDefaultInWindowsTerminal -and $Config.InstallWindowsTerminal) {
-    Ensure-WindowsTerminalDefaultProfileUbuntu -UbuntuName $Config.UbuntuDistroName
-  }
-  if ($Config.WindowsTerminalConfig.Configure) {
-    Ensure-WindowsTerminalProfileDefaults -WtConfig $Config.WindowsTerminalConfig
-    Ensure-WindowsTerminalTheme -WtConfig $Config.WindowsTerminalConfig
-  }
+if ($Config.WezTermConfig.Configure) {
+  Show-Progress "Configuring WezTerm"
+  Ensure-WezTermConfig -WtConfig $Config.WezTermConfig `
+    -WslDistro $Config.UbuntuDistroName `
+    -MakeWslDefault $Config.SetWslAsDefaultInWezTerm
 }
 
-if ($Config.OhMyPosh.Configure) {
-  Show-Progress "Configuring Oh My Posh"
-  Ensure-OhMyPoshPowerShell -Theme $Config.OhMyPosh.Theme
+if ($Config.Starship.Configure) {
+  Show-Progress "Configuring Starship"
+  Ensure-StarshipPowerShell -Preset $Config.Starship.Preset
 }
 
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {

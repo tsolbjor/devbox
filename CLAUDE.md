@@ -10,7 +10,7 @@ Idempotent setup scripts for a Windows + WSL2 development environment. There are
 
 | File | Language | Run as | Purpose |
 |------|----------|--------|---------|
-| `setup-windows.ps1` | PowerShell | Administrator | Installs Windows Terminal, VS Code, Rancher Desktop, WSL2/Ubuntu; writes `~/.wslconfig` with 75% of system RAM/CPUs; configures Rancher Desktop VM (moby engine, Kubernetes enabled) |
+| `setup-windows.ps1` | PowerShell | Administrator | Installs WezTerm, PowerShell 7, VS Code, Rancher Desktop, WSL2/Ubuntu; writes a managed `~/.wezterm.lua`, configures the Starship prompt, and writes `~/.wslconfig` with 75% of system RAM/CPUs; configures Rancher Desktop VM (moby engine, Kubernetes enabled) |
 | `setup-ubuntu.sh` | Bash | Normal user | Installs apt packages, configures Git globally, generates SSH key, creates `~/code` |
 
 Both scripts are safe to rerun (idempotent).

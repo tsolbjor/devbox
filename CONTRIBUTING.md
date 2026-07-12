@@ -67,7 +67,7 @@ function Ensure-Thing {
 
 Run the script on a clean machine (or a fresh WSL distro) and verify everything installs correctly. Then run it a second time — the second run should produce only `✓` lines and make no changes to the system.
 
-For the Windows script, the Rancher Desktop and Windows Terminal functions require those apps to have been launched at least once before the settings files exist.
+For the Windows script, the Rancher Desktop function requires that app to have been launched at least once before its settings file exists. WezTerm needs no prior launch — the script writes a managed `~/.wezterm.lua` directly.
 
 ## Submitting changes
 
