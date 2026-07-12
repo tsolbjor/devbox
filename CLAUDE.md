@@ -10,11 +10,13 @@ Idempotent setup scripts for a Windows + WSL2 development environment. There are
 
 | File | Language | Run as | Purpose |
 |------|----------|--------|---------|
-| `bootstrap-windows.ps1` | PowerShell | Administrator | First-run bootstrap for a blank PC: verifies winget, installs Git, creates a VHDX-backed Dev Drive at `D:` (with a boot-time re-attach task), clones this repo to `D:\code`. Installs no apps; prepares the ground for `setup-windows.ps1`. Fetch-and-run via `irm .../bootstrap-windows.ps1 | iex` |
-| `setup-windows.ps1` | PowerShell | Administrator | Installs WezTerm, PowerShell 7, VS Code, Rancher Desktop, WSL2/Ubuntu; writes a managed `~/.wezterm.lua`, configures the Starship prompt, and writes `~/.wslconfig` with 75% of system RAM/CPUs; configures Rancher Desktop VM (moby engine, Kubernetes enabled) |
+| `bootstrap-windows.ps1` | PowerShell | Administrator | First-run bootstrap for a blank PC: verifies winget, installs Git, creates a VHDX-backed Dev Drive at `D:` (with a boot-time re-attach task), clones this repo to `D:\code\devbox`. Installs no apps; prepares the ground for `setup-windows.ps1`. Fetch-and-run via `irm .../bootstrap-windows.ps1 | iex` |
+| `setup-windows.ps1` | PowerShell | Administrator | Installs WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip, host Node.js, Azure Functions Core Tools, Azure CLI; writes a managed `~/.wezterm.lua`, configures the Starship prompt, and writes `~/.wslconfig` with 75% of system RAM/CPUs; configures Rancher Desktop VM (moby engine, Kubernetes enabled); relocates npm/NuGet caches onto the `D:` Dev Drive |
 | `setup-ubuntu.sh` | Bash | Normal user | Installs apt packages, configures Git globally, generates SSH key, creates `~/code` |
+| `update-windows.ps1` | PowerShell | Administrator | Maintenance-only refresh of an existing machine: OS/Defender/Store updates, `wsl --update`, `winget upgrade --all`, global npm packages. Installs nothing new |
+| `update-ubuntu.sh` | Bash | Normal user | Maintenance-only refresh: apt upgrade plus starship, zoxide, git-delta, lazygit, stern, k9s, kubectx, npm globals, pipx tools. `--skip-*` flags opt out |
 
-Both scripts are safe to rerun (idempotent).
+All scripts are safe to rerun (idempotent).
 
 ## Running the scripts
 
@@ -32,16 +34,16 @@ bash setup-ubuntu.sh
 
 ## Coding conventions
 
-### Both scripts
+### All scripts
 - All user-configurable values live at the top in a clearly marked `PARAMETERS` section. Core logic stays untouched when users customise.
 - Status output uses `✓` (already done), `→` (taking action), `⚠` (warning).
 
-### Bash (`setup-ubuntu.sh`)
+### Bash (`setup-ubuntu.sh`, `update-ubuntu.sh`)
 - Strict mode: `set -euo pipefail`
 - Functions: `snake_case` verbs — `ensure_pkg`, `ensure_dir`, `ensure_git_config`, `ensure_ssh_key`, `ensure_command`
 - Variables: `UPPER_CASE` for env/config, `lower_case` locals
 
-### PowerShell (`setup-windows.ps1`)
+### PowerShell (`setup-windows.ps1`, `bootstrap-windows.ps1`, `update-windows.ps1`)
 - Strict mode: `Set-StrictMode -Version Latest`, `$ErrorActionPreference = "Stop"`
 - Functions: `PascalCase` verb-noun — `Ensure-WSL`, `Install-WingetPackage`, `Get-SystemResources`
 - Config: top-level `$Config` hashtable; `$null` values are resolved at runtime (e.g. WSL memory auto-detects to 75% of system RAM via `Get-SystemResources` + `Get-WslAllocation`)
