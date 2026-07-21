@@ -573,6 +573,10 @@ if ((Get-Module PSReadLine).Version -ge [version]'2.2.0') {
 } elseif ((Get-Module PSReadLine).Version -ge [version]'2.1.0') {
   Set-PSReadLineOption -PredictionSource History
 }
+# PSReadLine colours Parameter/Operator tokens DarkGray by default, which is
+# nearly invisible on the OneHalfDark background. Give parameters a soft cyan
+# (OneHalfDark #56b6c2) and operators a readable grey.
+Set-PSReadLineOption -Colors @{ Parameter = "`e[38;2;86;182;194m"; Operator = 'Gray' }
 if (Get-Module -ListAvailable PSFzf) {
   Import-Module PSFzf
   Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r'
