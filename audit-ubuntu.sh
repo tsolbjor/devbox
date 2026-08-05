@@ -120,12 +120,28 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
     check_rc_marker  "$rc" 'devbox terminal cwd' 'terminal cwd/title reporting'
     check_rc_present "$rc" 'fzf'                 'fzf integration'
   done
-  check_rc_marker "$HOME/.zshrc" 'zsh-autosuggestions.zsh'      'zsh-autosuggestions'
-  check_rc_marker "$HOME/.zshrc" 'zsh-syntax-highlighting.zsh'  'zsh-syntax-highlighting'
+  # Each zsh-users plugin must be loaded exactly once — as an oh-my-zsh plugin
+  # (custom/plugins clone) or sourced from the apt copy, never both.
+  for zp in zsh-autosuggestions zsh-syntax-highlighting; do
+    via_omz=false; via_apt=false
+    grep -qE "^plugins=\(.*${zp}" "$HOME/.zshrc" 2>/dev/null && via_omz=true
+    # -F: the dot in "<plugin>.zsh" is literal — as a regex it also matches the space
+    # before the next entry on the plugins=(...) line and reports a phantom double load
+    grep -qF "$zp.zsh" "$HOME/.zshrc" 2>/dev/null && via_apt=true
+    if [[ "$via_omz" == true && "$via_apt" == true ]]; then
+      report_drift "$zp is loaded twice (omz plugin + apt source)." \
+        "fix: remove the 'source /usr/share/$zp/...' line from ~/.zshrc"
+    elif [[ "$via_omz" == false && "$via_apt" == false ]]; then
+      report_drift "$zp not loaded in .zshrc." "fix: bash setup-ubuntu.sh"
+    fi
+    if [[ "$via_omz" == true && ! -d "$HOME/.oh-my-zsh/custom/plugins/$zp" ]]; then
+      report_drift "$zp listed in omz plugins=(...) but not cloned into custom/plugins." \
+        "fix: bash setup-ubuntu.sh (clones it)"
+    fi
+  done
 
   # oh-my-zsh — framework only. Starship's init runs after it, so any ZSH_THEME is
-  # rendered and thrown away, and plugins listed in plugins=(...) that are also
-  # sourced from apt get loaded twice.
+  # rendered and thrown away. (Double-loaded plugins are checked per plugin above.)
   want_omz=$(grep -m1 '^INSTALL_OMZ=' "$SETUP" 2>/dev/null | grep -oE 'true|false' | head -1 || true)
   if [[ -d "$HOME/.oh-my-zsh" ]]; then
     grep -q 'oh-my-zsh.sh' "$HOME/.zshrc" 2>/dev/null \
@@ -136,10 +152,6 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
       *) report_drift "$omz_theme — starship replaces it, so omz renders a prompt that is discarded." \
            "fix: bash setup-ubuntu.sh (clears ZSH_THEME)" ;;
     esac
-    if grep -qE '^plugins=\(.*(zsh-autosuggestions|zsh-syntax-highlighting)' "$HOME/.zshrc" 2>/dev/null; then
-      report_drift "zsh plugins are in omz plugins=(...) and sourced from apt (loaded twice)." \
-        "fix: drop them from plugins=(...) in ~/.zshrc — setup keeps OMZ_PLUGINS to 'git'"
-    fi
   elif [[ "$want_omz" == "true" ]]; then
     report_drift "oh-my-zsh missing (setup installs it)." "fix: bash setup-ubuntu.sh"
   fi

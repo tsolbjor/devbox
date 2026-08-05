@@ -54,9 +54,15 @@ INSTALL_ZSH_PLUGINS="${INSTALL_ZSH_PLUGINS:-true}"  # zsh-autosuggestions + zsh-
 INSTALL_OMZ="${INSTALL_OMZ:-true}"                  # oh-my-zsh: framework only (completion, git aliases,
                                                     # tab-title support). Starship stays the prompt, so
                                                     # ZSH_THEME is forced empty — see ensure_omz.
-OMZ_PLUGINS="${OMZ_PLUGINS:-git}"                   # omz plugin list. Deliberately excludes
-                                                    # zsh-autosuggestions/zsh-syntax-highlighting: those
-                                                    # come from apt via INSTALL_ZSH_PLUGINS.
+OMZ_PLUGINS="${OMZ_PLUGINS:-git zsh-autosuggestions zsh-syntax-highlighting}"
+# Plugins omz loads from its own custom/plugins clones (upstream tracks newer than apt —
+# the apt zsh-autosuggestions is 0.7.0 and suggests less). Cloned by ensure_omz, pulled by
+# update-ubuntu.sh. ensure_zsh_plugins falls back to the apt packages when a clone is
+# absent, and never sources one that omz already loads.
+OMZ_CUSTOM_PLUGINS=(
+  "zsh-autosuggestions https://github.com/zsh-users/zsh-autosuggestions"
+  "zsh-syntax-highlighting https://github.com/zsh-users/zsh-syntax-highlighting"
+)
 INSTALL_NODE="${INSTALL_NODE:-true}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"   # LTS; https://nodejs.org/en/about/previous-releases
 CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-true}"   # set false on native Linux (not WSL)
@@ -535,30 +541,60 @@ OMZ
     sed -i 's|^ZSH_THEME=.*|ZSH_THEME=""   # starship renders the prompt; an omz theme would be discarded|' \
       "$HOME/.zshrc"
   fi
+
+  # Clone the zsh-users plugins omz loads from custom/plugins
+  local entry name url dest
+  for entry in "${OMZ_CUSTOM_PLUGINS[@]}"; do
+    name="${entry%% *}"; url="${entry#* }"
+    dest="$HOME/.oh-my-zsh/custom/plugins/$name"
+    if [[ -d "$dest" ]]; then
+      echo "✓ omz plugin already cloned: $name"
+    else
+      echo "→ Cloning omz plugin: $name"
+      git clone --depth=1 --quiet "$url" "$dest"
+    fi
+  done
+
+  # Add anything from OMZ_PLUGINS the plugins=(...) line is missing. Only ever adds,
+  # so hand-added plugins survive a rerun. Compared as whole words against the
+  # existing list — a substring match would re-add "git" to plugins=(git).
+  local want list missing=()
+  list=$(sed -n 's|^plugins=(\(.*\))|\1|p' "$HOME/.zshrc" | head -1)
+  for want in $OMZ_PLUGINS; do
+    [[ " $list " == *" $want "* ]] || missing+=("$want")
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "→ Adding to omz plugins: ${missing[*]}"
+    sed -i "s|^plugins=(\(.*\))|plugins=(\1 ${missing[*]})|" "$HOME/.zshrc"
+  else
+    echo "✓ omz plugins list already has: $OMZ_PLUGINS"
+  fi
 }
 
+# Fallback loader for the zsh-users plugins. oh-my-zsh loads them from its
+# custom/plugins clones when ensure_omz ran, so this only installs the apt packages
+# and sources them when a clone is absent — sourcing one omz already loads would
+# double the work, and (for autosuggestions) leave two sets of wrapped widgets.
 ensure_zsh_plugins() {
   is_pkg_installed zsh || { echo "✓ zsh not installed, skipping plugins"; return; }
-  ensure_pkg zsh-autosuggestions
-  ensure_pkg zsh-syntax-highlighting
   [[ -f "$HOME/.zshrc" ]] || return
-  local auto="/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh"
-  local syntax="/usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
-  # Match the bare plugin name, not just the .zsh file: an oh-my-zsh `plugins=(...)`
-  # entry loads the same plugin, and sourcing it again as well doubles the work.
-  if grep -q 'zsh-autosuggestions' "$HOME/.zshrc"; then
-    echo "✓ zsh-autosuggestions already loaded in .zshrc"
-  elif [[ -f "$auto" ]]; then
-    echo "→ Sourcing zsh-autosuggestions in .zshrc"
-    printf '\nsource %s\n' "$auto" >> "$HOME/.zshrc"
-  fi
-  # zsh-syntax-highlighting must be sourced last, so keep this after everything else
-  if grep -q 'zsh-syntax-highlighting' "$HOME/.zshrc"; then
-    echo "✓ zsh-syntax-highlighting already loaded in .zshrc"
-  elif [[ -f "$syntax" ]]; then
-    echo "→ Sourcing zsh-syntax-highlighting in .zshrc (kept last)"
-    printf '\nsource %s\n' "$syntax" >> "$HOME/.zshrc"
-  fi
+  # autosuggestions first: zsh-syntax-highlighting must be sourced last
+  local name
+  for name in zsh-autosuggestions zsh-syntax-highlighting; do
+    local file="/usr/share/$name/$name.zsh"
+    if [[ -d "$HOME/.oh-my-zsh/custom/plugins/$name" ]] \
+       && grep -qE "^plugins=\(.*${name}" "$HOME/.zshrc"; then
+      echo "✓ $name loaded by oh-my-zsh"
+      continue
+    fi
+    ensure_pkg "$name"
+    if grep -q "$name.zsh" "$HOME/.zshrc"; then
+      echo "✓ $name already sourced in .zshrc"
+    elif [[ -f "$file" ]]; then
+      echo "→ Sourcing $name in .zshrc"
+      printf '\nsource %s\n' "$file" >> "$HOME/.zshrc"
+    fi
+  done
 }
 
 ensure_starship() {

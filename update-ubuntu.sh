@@ -257,6 +257,21 @@ update_omz() {
   else
     echo "✓ oh-my-zsh updated: $before → $after"
   fi
+  # custom/plugins are separate clones (zsh-autosuggestions etc.) — omz never pulls them
+  local plugin name
+  for plugin in "$omz"/custom/plugins/*/.git; do
+    [[ -d "$plugin" ]] || continue
+    plugin="${plugin%/.git}"
+    name=$(basename "$plugin")
+    before=$(git -C "$plugin" rev-parse --short HEAD)
+    git -C "$plugin" pull --ff-only --quiet || { echo "⚠ $name: pull failed, skipping"; continue; }
+    after=$(git -C "$plugin" rev-parse --short HEAD)
+    if [[ "$before" == "$after" ]]; then
+      echo "✓ $name already at latest ($after)"
+    else
+      echo "✓ $name updated: $before → $after"
+    fi
+  done
 }
 
 update_npm_globals() {
