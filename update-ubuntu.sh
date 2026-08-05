@@ -13,6 +13,7 @@ UPDATE_LAZYGIT="${UPDATE_LAZYGIT:-true}"
 UPDATE_STERN="${UPDATE_STERN:-true}"
 UPDATE_K9S="${UPDATE_K9S:-true}"
 UPDATE_KUBECTX="${UPDATE_KUBECTX:-true}"
+UPDATE_OMZ="${UPDATE_OMZ:-true}"                   # oh-my-zsh self-update (git pull of ~/.oh-my-zsh)
 UPDATE_NPM_GLOBALS="${UPDATE_NPM_GLOBALS:-true}"   # npm update -g if npm is available
 UPDATE_PIPX="${UPDATE_PIPX:-true}"                 # pipx upgrade-all (updates uv and other pipx tools)
 
@@ -32,6 +33,7 @@ Usage: update-ubuntu.sh [options]
   --skip-stern         Skip stern update
   --skip-k9s           Skip k9s update
   --skip-kubectx       Skip kubectx/kubens update
+  --skip-omz           Skip oh-my-zsh update
   --skip-npm-globals   Skip global npm package update
   --skip-pipx          Skip pipx upgrade-all
   -h, --help           Show this help
@@ -48,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --skip-stern)        UPDATE_STERN=false ;;
     --skip-k9s)          UPDATE_K9S=false ;;
     --skip-kubectx)      UPDATE_KUBECTX=false ;;
+    --skip-omz)          UPDATE_OMZ=false ;;
     --skip-npm-globals)  UPDATE_NPM_GLOBALS=false ;;
     --skip-pipx)         UPDATE_PIPX=false ;;
     -h|--help)           usage; exit 0 ;;
@@ -237,6 +240,25 @@ update_kubectx() {
   fi
 }
 
+update_omz() {
+  local omz="$HOME/.oh-my-zsh"
+  if [[ ! -d "$omz/.git" ]]; then
+    echo "✓ oh-my-zsh not installed, skipping"
+    return
+  fi
+  local before after
+  before=$(git -C "$omz" rev-parse --short HEAD)
+  echo "→ Updating oh-my-zsh (current: $before)"
+  # omz's own updater is interactive-zsh only; a plain fast-forward is the same thing
+  git -C "$omz" pull --ff-only --quiet
+  after=$(git -C "$omz" rev-parse --short HEAD)
+  if [[ "$before" == "$after" ]]; then
+    echo "✓ oh-my-zsh already at latest ($after)"
+  else
+    echo "✓ oh-my-zsh updated: $before → $after"
+  fi
+}
+
 update_npm_globals() {
   if ! ensure_command npm; then
     echo "✓ npm not found, skipping"
@@ -270,6 +292,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_STERN"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_K9S"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_KUBECTX"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_OMZ"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_NPM_GLOBALS"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_PIPX"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 
@@ -281,6 +304,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_STERN"       == "true" ]] && run_step "Updating stern"             --skip-stern        update_stern
 [[ "$UPDATE_K9S"         == "true" ]] && run_step "Updating k9s"               --skip-k9s          update_k9s
 [[ "$UPDATE_KUBECTX"     == "true" ]] && run_step "Updating kubectx/kubens"    --skip-kubectx      update_kubectx
+[[ "$UPDATE_OMZ"         == "true" ]] && run_step "Updating oh-my-zsh"          --skip-omz          update_omz
 [[ "$UPDATE_NPM_GLOBALS" == "true" ]] && run_step "Updating global npm packages" --skip-npm-globals update_npm_globals
 [[ "$UPDATE_PIPX"        == "true" ]] && run_step "Upgrading pipx tools"          --skip-pipx         update_pipx
 

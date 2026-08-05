@@ -216,8 +216,12 @@ if ($Config.CheckConfigFiles) {
           @{ Name = "color_scheme"; Want = $wt.ColorScheme;       Pattern = "color_scheme\s*=\s*'$([regex]::Escape($wt.ColorScheme))'" },
           @{ Name = "cursor";       Want = $wt.CursorStyle;       Pattern = "default_cursor_style\s*=\s*'$([regex]::Escape($wt.CursorStyle))'" },
           @{ Name = "audible_bell"; Want = $wt.AudibleBell;       Pattern = "audible_bell\s*=\s*'$([regex]::Escape($wt.AudibleBell))'" },
-          @{ Name = "scrollback";   Want = "$($wt.ScrollbackLines)"; Pattern = "scrollback_lines\s*=\s*$($wt.ScrollbackLines)\b" }
+          @{ Name = "scrollback";   Want = "$($wt.ScrollbackLines)"; Pattern = "scrollback_lines\s*=\s*$($wt.ScrollbackLines)\b" },
+          @{ Name = "tab_max_width"; Want = "$($wt.TabMaxWidth)";   Pattern = "tab_max_width\s*=\s*$($wt.TabMaxWidth)\b" }
         )
+        if ($wt.TabTitleShowCwd) {
+          $checks += @{ Name = "tab title cwd"; Want = "cwd"; Pattern = "format-tab-title" }
+        }
         $bad = @($checks | Where-Object { $lua -notmatch $_.Pattern })
         if ($bad) {
           Report-Drift "~/.wezterm.lua drifted from `$Config: $(( $bad | ForEach-Object { $_.Name }) -join ', ')" @(
@@ -241,6 +245,17 @@ if ($Config.CheckConfigFiles) {
     }
     if ($setup.ConfigurePwshExtras -and $content -notmatch 'devbox: PSReadLine predictions') {
       Report-Drift "$($p.Name) profile missing PSReadLine/PSFzf block." @("fix: .\setup-windows.ps1")
+    }
+    if ($setup.ShowCwdInTabTitle -and $content -notmatch 'devbox: tab title') {
+      Report-Drift "$($p.Name) profile missing tab-title block." @("fix: .\setup-windows.ps1")
+    }
+    # Only the last prompt engine to initialise wins; a second one is wasted startup
+    # time at best, and a broken command at worst once its binary is uninstalled.
+    if ($setup.Starship.Configure -and $content -match 'oh-my-posh') {
+      Report-Drift "$($p.Name) profile initialises oh-my-posh as well as Starship." @(
+        "fix: remove the oh-my-posh line from $($p.Path)",
+        "keep it instead: set `$Config.Starship.Configure = `$false in setup-windows.ps1"
+      )
     }
   }
 

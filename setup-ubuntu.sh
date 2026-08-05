@@ -51,6 +51,12 @@ INSTALL_DELTA="${INSTALL_DELTA:-true}"              # git-delta: nicer diffs (wi
 INSTALL_LAZYGIT="${INSTALL_LAZYGIT:-true}"          # git TUI
 INSTALL_STERN="${INSTALL_STERN:-true}"              # multi-pod Kubernetes log tailing
 INSTALL_ZSH_PLUGINS="${INSTALL_ZSH_PLUGINS:-true}"  # zsh-autosuggestions + zsh-syntax-highlighting
+INSTALL_OMZ="${INSTALL_OMZ:-true}"                  # oh-my-zsh: framework only (completion, git aliases,
+                                                    # tab-title support). Starship stays the prompt, so
+                                                    # ZSH_THEME is forced empty — see ensure_omz.
+OMZ_PLUGINS="${OMZ_PLUGINS:-git}"                   # omz plugin list. Deliberately excludes
+                                                    # zsh-autosuggestions/zsh-syntax-highlighting: those
+                                                    # come from apt via INSTALL_ZSH_PLUGINS.
 INSTALL_NODE="${INSTALL_NODE:-true}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"   # LTS; https://nodejs.org/en/about/previous-releases
 CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-true}"   # set false on native Linux (not WSL)
@@ -488,6 +494,49 @@ ensure_stern() {
   echo "✓ stern ${version} installed"
 }
 
+# oh-my-zsh is the zsh *framework* (completion defaults, git aliases, the
+# termsupport hooks that title the tab) — not the prompt. Starship renders the
+# prompt, and its init runs after omz, so any ZSH_THEME is built and thrown away:
+# ensure_omz forces it empty. Run this before ensure_zsh_plugins/ensure_starship
+# so the appended blocks end up in load order.
+ensure_omz() {
+  is_pkg_installed zsh || { echo "✓ zsh not installed, skipping oh-my-zsh"; return; }
+  if [[ -d "$HOME/.oh-my-zsh" ]]; then
+    echo "✓ oh-my-zsh already installed"
+  else
+    echo "→ Installing oh-my-zsh"
+    # KEEP_ZSHRC stops the installer replacing an existing .zshrc with its template
+    RUNZSH=no CHSH=no KEEP_ZSHRC=yes \
+      sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+  fi
+
+  [[ -f "$HOME/.zshrc" ]] || return
+
+  if grep -q 'oh-my-zsh.sh' "$HOME/.zshrc"; then
+    echo "✓ oh-my-zsh already sourced in .zshrc"
+  else
+    echo "→ Adding oh-my-zsh block to .zshrc"
+    cat >> "$HOME/.zshrc" <<OMZ
+
+# devbox oh-my-zsh — framework only; starship (below) renders the prompt
+export ZSH="\$HOME/.oh-my-zsh"
+ZSH_THEME=""
+plugins=($OMZ_PLUGINS)
+source \$ZSH/oh-my-zsh.sh
+OMZ
+  fi
+
+  local theme_line
+  theme_line=$(grep -m1 '^ZSH_THEME=' "$HOME/.zshrc" || true)
+  if [[ -z "$theme_line" ]] || [[ "$theme_line" == 'ZSH_THEME=""'* ]] || [[ "$theme_line" == "ZSH_THEME=''"* ]]; then
+    echo "✓ ZSH_THEME already empty (starship owns the prompt)"
+  else
+    echo "→ Clearing ${theme_line} (starship owns the prompt)"
+    sed -i 's|^ZSH_THEME=.*|ZSH_THEME=""   # starship renders the prompt; an omz theme would be discarded|' \
+      "$HOME/.zshrc"
+  fi
+}
+
 ensure_zsh_plugins() {
   is_pkg_installed zsh || { echo "✓ zsh not installed, skipping plugins"; return; }
   ensure_pkg zsh-autosuggestions
@@ -495,15 +544,17 @@ ensure_zsh_plugins() {
   [[ -f "$HOME/.zshrc" ]] || return
   local auto="/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh"
   local syntax="/usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
-  if grep -q 'zsh-autosuggestions.zsh' "$HOME/.zshrc"; then
-    echo "✓ zsh-autosuggestions already sourced in .zshrc"
+  # Match the bare plugin name, not just the .zsh file: an oh-my-zsh `plugins=(...)`
+  # entry loads the same plugin, and sourcing it again as well doubles the work.
+  if grep -q 'zsh-autosuggestions' "$HOME/.zshrc"; then
+    echo "✓ zsh-autosuggestions already loaded in .zshrc"
   elif [[ -f "$auto" ]]; then
     echo "→ Sourcing zsh-autosuggestions in .zshrc"
     printf '\nsource %s\n' "$auto" >> "$HOME/.zshrc"
   fi
   # zsh-syntax-highlighting must be sourced last, so keep this after everything else
-  if grep -q 'zsh-syntax-highlighting.zsh' "$HOME/.zshrc"; then
-    echo "✓ zsh-syntax-highlighting already sourced in .zshrc"
+  if grep -q 'zsh-syntax-highlighting' "$HOME/.zshrc"; then
+    echo "✓ zsh-syntax-highlighting already loaded in .zshrc"
   elif [[ -f "$syntax" ]]; then
     echo "→ Sourcing zsh-syntax-highlighting in .zshrc (kept last)"
     printf '\nsource %s\n' "$syntax" >> "$HOME/.zshrc"
@@ -553,6 +604,52 @@ ensure_starship() {
   elif [[ -f "$HOME/.zshrc" ]]; then
     echo "✓ starship already in .zshrc"
   fi
+}
+
+# Report the cwd to the terminal on every prompt: OSC 7 (the cwd itself, which
+# WezTerm reads for tab titles and new-pane inheritance) plus OSC 0 (the title,
+# which Windows Terminal and VS Code use as the tab label). Ubuntu's default PS1
+# carries an OSC 0 escape, but starship replaces PS1 outright, so without this
+# the tab reads "bash". Prepended to PROMPT_COMMAND at shell start, which keeps
+# starship's and zoxide's own hooks intact.
+ensure_terminal_cwd() {
+  for pair in ".bashrc:bash" ".zshrc:zsh"; do
+    local rc_file="${pair%%:*}" shell="${pair##*:}" rc="$HOME/${pair%%:*}"
+    [[ -f "$rc" ]] || continue
+    if grep -q 'devbox terminal cwd' "$rc"; then
+      echo "✓ Terminal cwd/title reporting already in $rc_file"
+      continue
+    fi
+    echo "→ Adding terminal cwd/title reporting to $rc_file"
+    if [[ "$shell" == "bash" ]]; then
+      cat >> "$rc" <<'TERMCWD'
+
+# devbox terminal cwd — report the cwd (OSC 7) and the tab title (OSC 0)
+__devbox_term_cwd() {
+  local leaf="${PWD##*/}"
+  printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-localhost}" "$PWD"
+  printf '\033]0;%s\007' "${leaf:-/}"
+}
+case "${PROMPT_COMMAND:-}" in
+  *__devbox_term_cwd*) ;;
+  *) PROMPT_COMMAND="__devbox_term_cwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+esac
+TERMCWD
+    else
+      cat >> "$rc" <<'TERMCWD'
+
+# devbox terminal cwd — report the cwd (OSC 7) and the tab title (OSC 0).
+# oh-my-zsh's termsupport already does both; leave it alone when it is loaded.
+__devbox_term_cwd() {
+  local leaf="${PWD##*/}"
+  printf '\033]7;file://%s%s\033\\' "${HOST:-localhost}" "$PWD"
+  printf '\033]0;%s\007' "${leaf:-/}"
+}
+autoload -Uz add-zsh-hook
+(( ${+functions[omz_termsupport_precmd]} )) || add-zsh-hook precmd __devbox_term_cwd
+TERMCWD
+    fi
+  done
 }
 
 ensure_dotnet() {
@@ -648,6 +745,7 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
 [[ "$INSTALL_DELTA"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_LAZYGIT"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_STERN"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_OMZ"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ZSH_PLUGINS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_NODE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_DOTNET"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -771,6 +869,9 @@ if [[ "$INSTALL_STARSHIP" == "true" ]]; then
   ensure_starship
 fi
 
+log "Configuring terminal cwd/title reporting (OSC 7 + OSC 0)"
+ensure_terminal_cwd
+
 if [[ "$INSTALL_ZOXIDE" == "true" ]]; then
   log "Installing zoxide"
   ensure_zoxide
@@ -799,6 +900,11 @@ fi
 if [[ "$INSTALL_STERN" == "true" ]]; then
   log "Installing stern"
   ensure_stern
+fi
+
+if [[ "$INSTALL_OMZ" == "true" ]]; then
+  log "Installing oh-my-zsh (framework only — starship renders the prompt)"
+  ensure_omz
 fi
 
 if [[ "$INSTALL_ZSH_PLUGINS" == "true" ]]; then

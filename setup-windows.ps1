@@ -32,6 +32,11 @@ $Config = @{
   # PowerShell experience — fzf + PSFzf (Ctrl+T / Ctrl+R) and PSReadLine predictive IntelliSense
   ConfigurePwshExtras = $true
 
+  # Report the current directory as the shell's title, so terminals that label a
+  # tab with it (Windows Terminal, VS Code) show the directory instead of the
+  # profile name. Rides on Starship's pre-command hook, so it needs Starship above.
+  ShowCwdInTabTitle = $true
+
   # Fonts (winget IDs)
   Fonts = @(
     "Microsoft.CascadiaCode",
@@ -61,6 +66,8 @@ $Config = @{
     CursorStyle        = "SteadyBar"     # "SteadyBar", "BlinkingBar", "SteadyBlock", "SteadyUnderline", ...
     AudibleBell        = "Disabled"      # "Disabled" or "SystemBeep"
     ScrollbackLines    = 30000
+    TabTitleShowCwd    = $true   # tab titles show the pane's current directory, not the program name
+    TabMaxWidth        = 28      # tab title width before truncation (WezTerm default is 16)
     # Quick shell-switching: the (+) tab-bar dropdown lists these, and Ctrl+Shift+1/2/3
     # spawn cmd / pwsh / Ubuntu directly. Ctrl+Shift+L opens the launcher menu.
     PwshStartDir       = "D:\code"       # pwsh (Ctrl+Shift+2) opens here
@@ -628,6 +635,43 @@ function Ensure-WezTermConfig {
   # Lua string literals need backslashes doubled (D:\code -> D:\\code)
   $pwshDirLua = $WtConfig.PwshStartDir -replace '\\', '\\'
 
+  # Tab titles. Literal here-string: the Lua below contains $ and \ that must survive verbatim.
+  $tabTitleLua = "-- Tab titles left at the WezTerm default (the program/shell title)."
+  if ($WtConfig.TabTitleShowCwd) {
+    $tabTitleLua = @'
+-- Tab titles show the active pane's current directory instead of the program
+-- name. Windows panes: WezTerm reads the cwd from the shell's own process.
+-- WSL panes: the cwd arrives as OSC 7 from the managed .bashrc block that
+-- setup-ubuntu.sh installs — a Windows path there is wsl.exe's own cwd, not
+-- the shell's, so it is ignored and the pane title is used instead.
+local function pane_dir(pane)
+  local cwd = pane.current_working_dir
+  if not cwd then return nil end
+  local path
+  if type(cwd) == 'string' then
+    path = (cwd:gsub('^file://[^/]*', ''))   -- older WezTerm: a file:// URL string
+  else
+    path = cwd.file_path or cwd.path         -- newer WezTerm: a Url object
+  end
+  if not path or path == '' then return nil end
+  local domain = pane.domain_name or 'local'
+  if domain ~= 'local' and path:match('^/?%a:') then return nil end
+  path = path:gsub('\\', '/'):gsub('/+', '/'):gsub('(.)/+$', '%1')
+  return path:match('[^/]+$') or path
+end
+
+wezterm.on('format-tab-title', function(tab, tabs, panes, config, hover, max_width)
+  local pane = tab.active_pane
+  local domain = pane.domain_name or 'local'
+  local title = pane_dir(pane) or pane.title
+  if domain ~= 'local' then
+    title = domain:gsub('^WSL:', '') .. ': ' .. title   -- keep Ubuntu tabs distinct from Windows ones
+  end
+  return wezterm.truncate_right(' ' .. (tab.tab_index + 1) .. ': ' .. title .. ' ', max_width)
+end)
+'@
+  }
+
   $lua = @"
 -- Managed by devbox setup-windows.ps1 — edits here are overwritten on rerun.
 -- To customise permanently, change the WezTermConfig block in setup-windows.ps1.
@@ -644,6 +688,9 @@ config.audible_bell = '$($WtConfig.AudibleBell)'
 config.scrollback_lines = $($WtConfig.ScrollbackLines)
 config.hide_tab_bar_if_only_one_tab = true
 config.warn_about_missing_glyphs = false
+config.tab_max_width = $($WtConfig.TabMaxWidth)
+
+$tabTitleLua
 
 -- On launch, open two tabs: Ubuntu (default WSL domain) + a Windows pwsh tab.
 -- Swap window:spawn_tab for a split pane by replacing it with the SplitPane action.
@@ -693,6 +740,45 @@ return config
     Write-Host "✓ WezTerm configured (font: $resolvedFontFace, scheme: $($WtConfig.ColorScheme))." -ForegroundColor Green
   } else {
     Write-Host "✓ WezTerm config already matches desired settings." -ForegroundColor Green
+  }
+}
+
+function Ensure-ShellTabTitle {
+  # Windows Terminal and the VS Code terminal label a tab with whatever title the
+  # shell reports, and PowerShell reports none — hence tabs that read "PowerShell".
+  # Invoke-Starship-PreCommand is Starship's supported per-prompt hook, so this
+  # needs no prompt wrapping and survives Starship regenerating its init.
+  $snippet = @'
+
+# --- devbox: tab title = current directory (managed block) ---
+function Invoke-Starship-PreCommand {
+  try {
+    $leaf = Split-Path -Leaf (Get-Location).Path
+    if ($leaf) { $Host.UI.RawUI.WindowTitle = $leaf }
+  } catch { }   # hosts with no console (ISE, redirected output) can't set a title
+}
+# --- end devbox block ---
+'@
+
+  $docs = [Environment]::GetFolderPath("MyDocuments")
+  $targets = @(
+    @{ Profile = Join-Path $docs "WindowsPowerShell\Microsoft.PowerShell_profile.ps1"; Exe = "powershell" }
+    @{ Profile = Join-Path $docs "PowerShell\Microsoft.PowerShell_profile.ps1";        Exe = "pwsh" }
+  )
+  foreach ($t in $targets) {
+    if (-not (Test-Command $t.Exe)) { continue }
+
+    $dir = Split-Path $t.Profile
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+
+    $content = if (Test-Path $t.Profile) { Get-Content $t.Profile -Raw } else { "" }
+    if ($content -match "devbox: tab title") {
+      Write-Host "✓ Tab-title block already in: $($t.Profile)" -ForegroundColor Green
+      continue
+    }
+    Write-Host "→ Adding tab-title block to: $($t.Profile)" -ForegroundColor Cyan
+    Add-Content -Path $t.Profile -Value $snippet -Encoding UTF8
+    Write-Host "✓ Tab title follows the current directory in: $($t.Profile)" -ForegroundColor Green
   }
 }
 
@@ -969,6 +1055,7 @@ if ($Config.CloudCLIs.Count -gt 0) { $totalSteps++ }
 if ($Config.WezTermConfig.Configure) { $totalSteps++ }
 if ($Config.Starship.Configure)   { $totalSteps++ }
 if ($Config.ConfigurePwshExtras)  { $totalSteps++ }
+if ($Config.ShowCwdInTabTitle)    { $totalSteps++ }
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) { $totalSteps++ }
 if ($Config.RancherDesktopConfig.Configure) { $totalSteps++ }
 $script:totalSteps = $totalSteps
@@ -1047,6 +1134,11 @@ if ($Config.Starship.Configure) {
 if ($Config.ConfigurePwshExtras) {
   Show-Progress "Configuring PowerShell experience (fzf + PSReadLine)"
   Ensure-PowerShellExperience
+}
+
+if ($Config.ShowCwdInTabTitle) {
+  Show-Progress "Configuring tab titles (current directory)"
+  Ensure-ShellTabTitle
 }
 
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {

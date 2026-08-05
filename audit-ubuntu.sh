@@ -117,10 +117,32 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
     check_rc_marker  "$rc" 'starship init'      'starship init'
     check_rc_marker  "$rc" 'zoxide init'        'zoxide init'
     check_rc_marker  "$rc" 'devbox eza aliases' 'eza aliases'
+    check_rc_marker  "$rc" 'devbox terminal cwd' 'terminal cwd/title reporting'
     check_rc_present "$rc" 'fzf'                 'fzf integration'
   done
   check_rc_marker "$HOME/.zshrc" 'zsh-autosuggestions.zsh'      'zsh-autosuggestions'
   check_rc_marker "$HOME/.zshrc" 'zsh-syntax-highlighting.zsh'  'zsh-syntax-highlighting'
+
+  # oh-my-zsh — framework only. Starship's init runs after it, so any ZSH_THEME is
+  # rendered and thrown away, and plugins listed in plugins=(...) that are also
+  # sourced from apt get loaded twice.
+  want_omz=$(grep -m1 '^INSTALL_OMZ=' "$SETUP" 2>/dev/null | grep -oE 'true|false' | head -1 || true)
+  if [[ -d "$HOME/.oh-my-zsh" ]]; then
+    grep -q 'oh-my-zsh.sh' "$HOME/.zshrc" 2>/dev/null \
+      || report_drift "~/.oh-my-zsh installed but .zshrc never sources it." "fix: bash setup-ubuntu.sh"
+    omz_theme=$(grep -m1 '^ZSH_THEME=' "$HOME/.zshrc" 2>/dev/null || true)
+    case "$omz_theme" in
+      ''|'ZSH_THEME=""'*|"ZSH_THEME=''"*) report_ok "oh-my-zsh present, prompt left to starship." ;;
+      *) report_drift "$omz_theme — starship replaces it, so omz renders a prompt that is discarded." \
+           "fix: bash setup-ubuntu.sh (clears ZSH_THEME)" ;;
+    esac
+    if grep -qE '^plugins=\(.*(zsh-autosuggestions|zsh-syntax-highlighting)' "$HOME/.zshrc" 2>/dev/null; then
+      report_drift "zsh plugins are in omz plugins=(...) and sourced from apt (loaded twice)." \
+        "fix: drop them from plugins=(...) in ~/.zshrc — setup keeps OMZ_PLUGINS to 'git'"
+    fi
+  elif [[ "$want_omz" == "true" ]]; then
+    report_drift "oh-my-zsh missing (setup installs it)." "fix: bash setup-ubuntu.sh"
+  fi
 
   # starship.toml (setup never overwrites it, but it should exist)
   if [[ -f "$HOME/.config/starship.toml" ]]; then
