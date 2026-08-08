@@ -98,7 +98,10 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
   check_rc_marker() {  # file, grep-pattern, human label — flags missing AND duplicated
     local file="$1" pat="$2" label="$3"
     [[ -f "$file" ]] || { report_drift "$(basename "$file") missing entirely." "fix: bash setup-ubuntu.sh"; return; }
-    local n; n=$(grep -cE "$pat" "$file" 2>/dev/null || echo 0)
+    # grep -c already prints 0 on no match (and exits 1); the old `|| echo 0` here
+    # appended a second 0, and the resulting "0\n0" made every [[ -eq ]] below an
+    # error — so the missing-block branch never fired for any marker.
+    local n; n=$(grep -cE "$pat" "$file" 2>/dev/null); n=${n:-0}
     if [[ "$n" -eq 0 ]]; then
       report_drift "$(basename "$file"): $label block missing." "fix: bash setup-ubuntu.sh (re-appends managed blocks)"
     elif [[ "$n" -gt 1 ]]; then
@@ -120,6 +123,64 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
     check_rc_marker  "$rc" 'devbox terminal cwd' 'terminal cwd/title reporting'
     check_rc_present "$rc" 'fzf'                 'fzf integration'
   done
+  check_rc_marker "$HOME/.bashrc" 'devbox: bash history ---'     'bash history settings'
+  check_rc_marker "$HOME/.zshrc"  'devbox: zsh history ---'      'zsh history settings'
+  check_rc_marker "$HOME/.zshrc"  'devbox: zsh history keys ---' 'zsh history keybindings'
+
+  # The two zsh history blocks are load-order sensitive, and being present in the
+  # wrong place fails silently: omz reassigns HISTSIZE/SAVEHIST over anything above
+  # it, and fzf's integration rebinds ^I over anything above it. Compare line
+  # numbers rather than trusting marker presence.
+  if [[ -f "$HOME/.zshrc" ]]; then
+    line_of() { grep -nF -m1 -- "$1" "$HOME/.zshrc" 2>/dev/null | cut -d: -f1; }
+    hist_ln=$(line_of '# --- devbox: zsh history ---')
+    keys_ln=$(line_of '# --- devbox: zsh history keys ---')
+    # Match the real source line, not the managed block's own comment, which quotes
+    # this exact path as documentation and would otherwise always win the -m1.
+    omz_ln=$(grep -nE '^[[:space:]]*(source|\.)[[:space:]]+\$ZSH/oh-my-zsh\.sh' "$HOME/.zshrc" 2>/dev/null | head -1 | cut -d: -f1)
+    # Last line that *loads* fzf, not merely mentions it: key-bindings.zsh and
+    # completion.zsh are sourced separately, and the keys block below references
+    # fzf-completion / FZF_CTRL_R_OPTS by name without loading anything.
+    fzf_ln=$(grep -nE '^[[:space:]]*(source|eval|\.)[^#]*fzf' "$HOME/.zshrc" 2>/dev/null | tail -1 | cut -d: -f1)
+
+    if [[ -n "$hist_ln" && -n "$omz_ln" && "$hist_ln" -gt "$omz_ln" ]]; then
+      report_drift "zsh history block (line $hist_ln) sits below the oh-my-zsh source line (line $omz_ln)." \
+        "omz's lib/history.zsh reassigns HISTSIZE/SAVEHIST, so the block has no effect." \
+        "fix: move the '# --- devbox: zsh history ---' block above the oh-my-zsh source line"
+    fi
+    if [[ -n "$keys_ln" && -n "$fzf_ln" && "$keys_ln" -lt "$fzf_ln" ]]; then
+      report_drift "zsh history keybindings (line $keys_ln) sit above the fzf integration (line $fzf_ln)." \
+        "fzf binds ^I to fzf-completion when it loads, clobbering the Tab widget." \
+        "fix: move the '# --- devbox: zsh history keys ---' block to the end of ~/.zshrc"
+    fi
+
+    # Effective values, not just marker presence — a later HISTSIZE=… anywhere in
+    # the file (or a stale block from an older setup) silently wins.
+    want_hist=$(grep -m1 '^SHELL_HISTORY_SIZE=' "$SETUP" 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    if [[ -n "$want_hist" ]]; then
+      for var in HISTSIZE SAVEHIST; do
+        have=$(grep -oE "^${var}=[0-9]+" "$HOME/.zshrc" 2>/dev/null | tail -1 | cut -d= -f2)
+        if [[ -z "$have" ]]; then
+          report_drift ".zshrc sets no $var (zsh defaults to 1000; omz to 10000)." "fix: bash setup-ubuntu.sh"
+        elif [[ "$have" -lt "$want_hist" ]]; then
+          report_drift ".zshrc $var=$have, below the expected $want_hist — history is being truncated." \
+            "fix: bash setup-ubuntu.sh, or adopt the smaller value by setting SHELL_HISTORY_SIZE in setup-ubuntu.sh"
+        fi
+      done
+    fi
+
+    # zsh-autosuggestions' stock fg=8 renders as invisible ghost text on the dark
+    # terminal themes this repo configures — the suggestion is there, unreadable.
+    style=$(grep -m1 '^ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE=' "$HOME/.zshrc" 2>/dev/null | cut -d= -f2- | tr -d "'\"")
+    case "$style" in
+      '')        report_drift "ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE unset — suggestions render in fg=8 (invisible on dark themes)." \
+                   "fix: bash setup-ubuntu.sh" ;;
+      fg=8|fg=black|fg=0)
+                 report_drift "ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='$style' is the invisible default." \
+                   "fix: bash setup-ubuntu.sh, or set ZSH_AUTOSUGGEST_COLOR to a readable value" ;;
+      *)         report_ok "Inline suggestion colour set ($style)." ;;
+    esac
+  fi
   # Each zsh-users plugin must be loaded exactly once — as an oh-my-zsh plugin
   # (custom/plugins clone) or sourced from the apt copy, never both.
   for zp in zsh-autosuggestions zsh-syntax-highlighting; do

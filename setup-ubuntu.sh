@@ -63,6 +63,17 @@ OMZ_CUSTOM_PLUGINS=(
   "zsh-autosuggestions https://github.com/zsh-users/zsh-autosuggestions"
   "zsh-syntax-highlighting https://github.com/zsh-users/zsh-syntax-highlighting"
 )
+
+# Shell history + inline suggestion UX (the zsh counterpart of the Windows
+# PSReadLine block). Off-by-default zsh keeps 1000 lines and oh-my-zsh raises that
+# to only SAVEHIST=10000, which silently truncates the history file on every write.
+CONFIGURE_SHELL_HISTORY="${CONFIGURE_SHELL_HISTORY:-true}"
+SHELL_HISTORY_SIZE="${SHELL_HISTORY_SIZE:-200000}"          # HISTSIZE/SAVEHIST for zsh, HISTSIZE/HISTFILESIZE for bash
+# zsh-autosuggestions defaults to fg=8 ("bright black"), which sits a shade off the
+# background on the OneHalfDark/Windows Terminal palettes and reads as no suggestion
+# at all. Same problem, same fix as PSReadLine's InlinePrediction colour on Windows.
+ZSH_AUTOSUGGEST_COLOR="${ZSH_AUTOSUGGEST_COLOR:-fg=#7f849c}"
+
 INSTALL_NODE="${INSTALL_NODE:-true}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"   # LTS; https://nodejs.org/en/about/previous-releases
 CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-true}"   # set false on native Linux (not WSL)
@@ -597,6 +608,168 @@ ensure_zsh_plugins() {
   done
 }
 
+MANAGED_END='# --- end devbox block ---'
+
+# Rewrite the body of an existing '# --- devbox: <marker> ---' block IN PLACE,
+# leaving the block where it already sits. Returns 1 when the block is absent, so
+# the caller decides where a first-time block goes.
+#
+# In place matters twice over here: marker-presence-only checks strand every
+# existing machine on the old block the moment the snippet changes (see
+# Set-ManagedProfileBlock on the Windows side), and for the zsh history blocks the
+# *position* is load-bearing — a delete-and-reappend would land the block on the
+# wrong side of oh-my-zsh or fzf and silently stop working.
+set_managed_block() {
+  local file="$1" marker="$2" body_file="$3" label="$4"
+  local begin="# --- devbox: ${marker} ---" tmp
+  grep -qxF "$begin" "$file" || return 1
+
+  tmp="$(mktemp)"
+  awk -v begin="$begin" -v endmark="$MANAGED_END" -v bodyfile="$body_file" '
+    $0 == begin {
+      print
+      while ((getline line < bodyfile) > 0) print line
+      close(bodyfile); inblock = 1; next
+    }
+    inblock && $0 == endmark { print; inblock = 0; next }
+    inblock { next }
+    { print }
+  ' "$file" > "$tmp"
+
+  if cmp -s "$tmp" "$file"; then
+    echo "✓ $label already current in $(basename "$file")"
+    rm -f "$tmp"
+  else
+    echo "→ Rewriting $label block in $(basename "$file")"
+    mv "$tmp" "$file"
+  fi
+}
+
+# Wrap a body in the managed delimiters, ready to splice or append.
+wrap_managed_block() {
+  local marker="$1" body_file="$2"
+  printf '\n# --- devbox: %s ---\n' "$marker"
+  cat "$body_file"
+  printf '%s\n' "$MANAGED_END"
+}
+
+# Splice a block into a file immediately BEFORE the first line containing a literal
+# anchor substring; append to the end when no line contains it. Needed because `>>`
+# can only ever put a load-order-sensitive block in the wrong place.
+#
+# The anchor is matched with index(), not a regex: awk mangles the `\$` in an
+# anchor like `\$ZSH/oh-my-zsh.sh` into a bare `$`, which is an end-of-line anchor
+# in ERE and matches nothing — the splice then silently drops the block.
+insert_before_anchor() {
+  local file="$1" anchor="$2" block_file="$3" tmp
+  tmp="$(mktemp)"
+  awk -v anchor="$anchor" -v blockfile="$block_file" '
+    function emit(  line) { while ((getline line < blockfile) > 0) print line; close(blockfile) }
+    !spliced && index($0, anchor) { emit(); spliced = 1 }
+    { print }
+    END { if (!spliced) emit() }
+  ' "$file" > "$tmp" && mv "$tmp" "$file"
+  rm -f "$tmp"
+}
+
+# History retention + PSReadLine-style inline suggestion UX for zsh, and history
+# retention for bash. Three managed blocks, two of them load-order sensitive:
+#
+#   1. "zsh history" MUST sit above `source $ZSH/oh-my-zsh.sh`. omz's
+#      lib/history.zsh assigns HISTSIZE/SAVEHIST unconditionally, and
+#      zsh-autosuggestions only honours ZSH_AUTOSUGGEST_* variables that are
+#      already set at the moment the plugin loads.
+#   2. "zsh history keys" MUST sit below the fzf integration, which binds ^I to
+#      fzf-completion when it loads and would otherwise clobber the Tab widget
+#      defined here.
+#   3. "bash history" is a plain append — Ubuntu's stock .bashrc sets
+#      HISTSIZE=1000/HISTFILESIZE=2000 near the top, so last assignment wins.
+#
+# Run this AFTER ensure_omz / ensure_fzf_shell_integration so both anchors exist.
+ensure_shell_history() {
+  local body wrapped
+  body="$(mktemp)"; wrapped="$(mktemp)"
+
+  if [[ -f "$HOME/.zshrc" ]]; then
+    # Note: no literal 'source $ZSH/oh-my-zsh.sh' in these comments — the audit
+    # locates that anchor by line number and a quoted copy would shadow the real one.
+    cat > "$body" <<ZHIST
+# Keep this block ABOVE the oh-my-zsh source line: omz's lib/history.zsh reassigns
+# HISTSIZE/SAVEHIST, and zsh-autosuggestions only reads ZSH_AUTOSUGGEST_* that are
+# already set at the moment the plugin loads.
+HISTFILE="\$HOME/.zsh_history"
+HISTSIZE=$SHELL_HISTORY_SIZE     # entries held in memory
+SAVEHIST=$SHELL_HISTORY_SIZE     # entries written to disk; a smaller value truncates the file on every write
+setopt EXTENDED_HISTORY          # record timestamps
+setopt HIST_EXPIRE_DUPS_FIRST    # trim duplicates before unique commands
+setopt HIST_IGNORE_SPACE         # a leading space keeps a command out of history
+setopt HIST_FIND_NO_DUPS         # don't re-offer a duplicate while searching
+setopt HIST_REDUCE_BLANKS
+setopt SHARE_HISTORY             # append immediately and share across live shells
+# Ghost text: the stock fg=8 is invisible on the dark themes this repo configures.
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='$ZSH_AUTOSUGGEST_COLOR'
+ZSH_AUTOSUGGEST_STRATEGY=(history completion)   # fall back to completion when history has no match
+ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE=40              # stop suggesting on very long lines (latency)
+ZHIST
+    if ! set_managed_block "$HOME/.zshrc" "zsh history" "$body" "zsh history settings"; then
+      echo "→ Adding zsh history settings to .zshrc (above the oh-my-zsh source, when present)"
+      wrap_managed_block "zsh history" "$body" > "$wrapped"
+      # Anchor on the path alone so both `source $ZSH/...` and `. $ZSH/...` match.
+      insert_before_anchor "$HOME/.zshrc" '$ZSH/oh-my-zsh.sh' "$wrapped"
+    fi
+
+    cat > "$body" <<'ZKEYS'
+# Keep this block BELOW the fzf integration, which binds ^I (Tab) to fzf-completion
+# and would otherwise win. Mirrors the PowerShell side: → accepts the whole
+# suggestion, Ctrl+→ one word, Ctrl+R lists the history.
+bindkey '^[[C'    autosuggest-accept   # Right arrow: accept the whole suggestion
+bindkey '^[[1;5C' forward-word         # Ctrl+Right: accept one word of it
+bindkey '^ '      autosuggest-accept   # Ctrl+Space: accept (Right arrow is taken mid-line)
+# Tab: take the ghost suggestion when one is showing, otherwise complete as usual.
+_devbox_tab_accept_or_complete() {
+  if [[ -n "$POSTDISPLAY" ]]; then
+    zle autosuggest-accept
+  elif (( ${+widgets[fzf-completion]} )); then
+    zle fzf-completion
+  else
+    zle expand-or-complete
+  fi
+}
+zle -N _devbox_tab_accept_or_complete
+bindkey '^I' _devbox_tab_accept_or_complete
+# Ctrl+R history picker — the closest thing zsh has to PSReadLine's ListView.
+export FZF_CTRL_R_OPTS="--height=45% --layout=reverse --border --info=inline --prompt='history > '"
+ZKEYS
+    if ! set_managed_block "$HOME/.zshrc" "zsh history keys" "$body" "zsh history keybindings"; then
+      echo "→ Adding zsh history keybindings to .zshrc"
+      wrap_managed_block "zsh history keys" "$body" >> "$HOME/.zshrc"
+    fi
+  fi
+
+  if [[ -f "$HOME/.bashrc" ]]; then
+    cat > "$body" <<BHIST
+# Ubuntu's stock .bashrc caps history at 1000/2000 lines near the top of the file;
+# these later assignments win.
+HISTSIZE=$SHELL_HISTORY_SIZE
+HISTFILESIZE=$SHELL_HISTORY_SIZE
+HISTCONTROL=ignoreboth:erasedups
+HISTTIMEFORMAT='%F %T '
+shopt -s histappend cmdhist
+# Flush after every command so a killed terminal doesn't lose the session.
+case "\${PROMPT_COMMAND:-}" in
+  *'history -a'*) ;;
+  *) PROMPT_COMMAND="history -a\${PROMPT_COMMAND:+;\$PROMPT_COMMAND}" ;;
+esac
+BHIST
+    if ! set_managed_block "$HOME/.bashrc" "bash history" "$body" "bash history settings"; then
+      echo "→ Adding bash history settings to .bashrc"
+      wrap_managed_block "bash history" "$body" >> "$HOME/.bashrc"
+    fi
+  fi
+
+  rm -f "$body" "$wrapped"
+}
+
 ensure_starship() {
   # Install binary
   if ensure_command starship; then
@@ -783,6 +956,7 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
 [[ "$INSTALL_STERN"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_OMZ"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ZSH_PLUGINS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$CONFIGURE_SHELL_HISTORY" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_NODE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_DOTNET"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_PYTHON"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -946,6 +1120,12 @@ fi
 if [[ "$INSTALL_ZSH_PLUGINS" == "true" ]]; then
   log "Installing zsh plugins"
   ensure_zsh_plugins
+fi
+
+if [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]]; then
+  # After omz and fzf: this splices relative to both of their blocks.
+  log "Configuring shell history and inline suggestions"
+  ensure_shell_history
 fi
 
 if [[ "$INSTALL_NODE" == "true" ]]; then

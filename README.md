@@ -83,6 +83,7 @@ Installs and configures:
 | Category | What gets set up |
 |---|---|
 | Shell | zsh (set as default), Starship, fzf, zoxide, zsh-autosuggestions + zsh-syntax-highlighting |
+| Shell UX | 200 000-line history for bash and zsh (flushed per command), inline suggestions in a readable colour, PSReadLine-style accept keys (`→`, `Ctrl+→`, `Tab`), `Ctrl+R` history picker |
 | Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, wget, zip, git-delta, lazygit, GitHub CLI, Node.js |
 | Languages | .NET SDK, Python (venv/pip/pipx/uv) |
 | Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern |

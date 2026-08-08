@@ -217,12 +217,40 @@ variables red. Edit the `Set-PSReadLineOption -Colors` hashtable in
 `Ensure-PowerShellExperience` (setup-windows.ps1) and rerun setup to change
 them — setup rewrites the block in place.
 
-### zsh plugins (WSL)
+### zsh predictions (WSL)
 
-- **zsh-autosuggestions** — greyed suggestion from history; press `→` or `End` to accept,
-  `Alt+F` to accept one word.
+The zsh counterpart of the PSReadLine block above — same keys, same idea.
+
+| Key | Does |
+|---|---|
+| `→` / `End` | Accept the whole suggestion |
+| `Ctrl+→` | Accept the next word only |
+| `Ctrl+Space` | Accept (useful mid-line, where `→` just moves the cursor) |
+| `Tab` | Accept the suggestion if one is showing, otherwise complete as usual |
+| `↑` | Prefix-search history — type `git ` first and `↑` walks only your git commands |
+| `Ctrl+R` | fzf history picker — the nearest thing zsh has to ListView |
+
+- **zsh-autosuggestions** — greyed suggestion drawn from history, falling back to
+  completion when history has no match.
 - **zsh-syntax-highlighting** — commands turn **green** when valid, **red** when not,
   before you even press Enter. No keys — it's purely visual.
+
+If the grey suggestion is invisible rather than absent, the colour is the problem,
+not the plugin: the stock `fg=8` ("bright black") is within a shade of the
+background on most WSL themes. Setup pins it to `#7f849c` via `ZSH_AUTOSUGGEST_COLOR`
+in `setup-ubuntu.sh`. `bash audit-ubuntu.sh` flags the stock value as drift.
+
+### Shell history (WSL)
+
+Both shells keep **200 000** lines (`SHELL_HISTORY_SIZE` in `setup-ubuntu.sh`) and
+flush after every command, so a killed terminal loses nothing. Out of the box zsh
+keeps 1000 and oh-my-zsh raises `SAVEHIST` to only 10 000 — which silently
+*truncates* `~/.zsh_history` on every write once you pass it.
+
+The zsh settings are load-order sensitive and setup places them accordingly:
+the `zsh history` block must sit **above** the oh-my-zsh source line (omz reassigns
+`HISTSIZE`/`SAVEHIST`), and the `zsh history keys` block must sit **below** the fzf
+integration (fzf binds `Tab`). The audit checks position, not just presence.
 
 ---
 
@@ -244,7 +272,7 @@ them — setup rewrites the block in place.
 | WezTerm | `~/.wezterm.lua` (Windows home) | **Managed** — rewritten by `setup-windows.ps1`. For permanent changes edit the `WezTermConfig` block in that script, or accept that reruns overwrite hand edits. |
 | Starship | `~/.config/starship.toml` (Windows **and** WSL, separately) | Never overwritten once it exists. |
 | PowerShell profiles | `Documents\PowerShell\Microsoft.PowerShell_profile.ps1` (PS7) and `…\WindowsPowerShell\…` (PS5) | Starship init + the PSReadLine/PSFzf block live here. |
-| Shell rc (WSL) | `~/.bashrc`, `~/.zshrc` | Starship, zoxide, fzf, and zsh plugin `source` lines are appended here. |
+| Shell rc (WSL) | `~/.bashrc`, `~/.zshrc` | Starship, zoxide, fzf, and zsh plugin `source` lines are appended here. The history/prediction settings live in `# --- devbox: … ---` blocks that setup rewrites **in place** — edit `ensure_shell_history` in `setup-ubuntu.sh` and rerun, or your changes are overwritten. |
 
 To reapply the whole setup, rerun `setup-windows.ps1` (as Admin) / `bash setup-ubuntu.sh` —
 both are idempotent. To keep tools current, run `update-windows.ps1` / `bash update-ubuntu.sh`.
