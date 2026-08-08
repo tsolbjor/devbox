@@ -56,6 +56,8 @@ bash setup-ubuntu.sh
 ### Idempotency pattern
 Check current state, skip if already correct, act and report if not. Every `Ensure-*` / `ensure_*` function follows this pattern.
 
+Managed blocks written into user config (PowerShell profiles, rc files) are delimited by `# --- devbox: <marker> ... # --- end devbox block ---` and rewritten **in place** by `Set-ManagedProfileBlock`, not merely appended when the marker is absent. Marker-presence-only checks strand every existing machine on the old block the moment the snippet changes. `audit-windows.ps1` cross-checks the installed block against the here-string it parses out of the setup function, so a stale block reports as drift.
+
 ## DevContainer
 
 `.devcontainer/` defines an Ubuntu 22.04 container used when developing inside this repo via VS Code. Git identity is injected via `containerEnv` in `devcontainer.json` — edit those values to personalise.

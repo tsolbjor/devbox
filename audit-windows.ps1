@@ -59,6 +59,26 @@ function Get-SetupConfig {
   return & ([scriptblock]::Create($assign.Right.Extent.Text))
 }
 
+# The managed profile block a given Ensure-* function writes, lifted out of the
+# setup script's here-string. Lets the audit spot a block that is present but
+# stale — the case a marker-only check misses entirely.
+function Get-ManagedBlockText {
+  param([string]$Path, [string]$FunctionName)
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$null)
+  $func = $ast.Find({
+    param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $FunctionName
+  }, $true)
+  if (-not $func) { return $null }
+  $str = $func.Find({
+    param($n)
+    $n -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+    $n.Value -match 'end devbox block'
+  }, $true)
+  if ($str) { return $str.Value.Trim() }
+  return $null
+}
+
 # All literal winget IDs installed by the given scripts (Install-WingetPackage -Id "…").
 function Get-LiteralWingetIds {
   param([string[]]$Paths)
@@ -243,11 +263,23 @@ if ($Config.CheckConfigFiles) {
     if ($setup.Starship.Configure -and $content -notmatch 'starship init') {
       Report-Drift "$($p.Name) profile missing Starship init." @("fix: .\setup-windows.ps1")
     }
-    if ($setup.ConfigurePwshExtras -and $content -notmatch 'devbox: PSReadLine predictions') {
-      Report-Drift "$($p.Name) profile missing PSReadLine/PSFzf block." @("fix: .\setup-windows.ps1")
-    }
-    if ($setup.ShowCwdInTabTitle -and $content -notmatch 'devbox: tab title') {
-      Report-Drift "$($p.Name) profile missing tab-title block." @("fix: .\setup-windows.ps1")
+    $blocks = @(
+      @{ Enabled = $setup.ConfigurePwshExtras; Marker = "PSReadLine predictions"; Label = "PSReadLine/PSFzf"; Func = "Ensure-PowerShellExperience" }
+      @{ Enabled = $setup.ShowCwdInTabTitle;   Marker = "tab title";              Label = "tab-title";        Func = "Ensure-ShellTabTitle" }
+    )
+    foreach ($b in $blocks) {
+      if (-not $b.Enabled) { continue }
+      $pattern = "(?ms)^# --- devbox: $([regex]::Escape($b.Marker)).*?^# --- end devbox block ---"
+      if ($content -notmatch $pattern) {
+        Report-Drift "$($p.Name) profile missing $($b.Label) block." @("fix: .\setup-windows.ps1")
+        continue
+      }
+      $expected = Get-ManagedBlockText -Path $Config.SetupScript -FunctionName $b.Func
+      if ($expected -and $Matches[0].Trim() -ne $expected) {
+        Report-Drift "$($p.Name) profile has an outdated $($b.Label) block." @(
+          "fix: .\setup-windows.ps1 (rewrites the block in place)"
+        )
+      }
     }
     # Only the last prompt engine to initialise wins; a second one is wasted startup
     # time at best, and a broken command at worst once its binary is uninstalled.

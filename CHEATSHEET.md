@@ -210,6 +210,13 @@ As you type, greyed-out suggestions appear from history + plugins (ListView).
 | `Ctrl+→` | Accept the next word only |
 | `F2` | Toggle inline ↔ list view |
 
+Syntax colours are remapped onto the OneHalfDark palette in the same managed
+profile block — PSReadLine's stock DarkGray parameters/operators are unreadable
+on that background. Commands are blue, `-Parameters` cyan, strings green,
+variables red. Edit the `Set-PSReadLineOption -Colors` hashtable in
+`Ensure-PowerShellExperience` (setup-windows.ps1) and rerun setup to change
+them — setup rewrites the block in place.
+
 ### zsh plugins (WSL)
 
 - **zsh-autosuggestions** — greyed suggestion from history; press `→` or `End` to accept,

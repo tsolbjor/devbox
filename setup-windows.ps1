@@ -566,6 +566,48 @@ function Ensure-PSGalleryModule {
   Install-Module @params
 }
 
+function Set-ManagedProfileBlock {
+  param(
+    [Parameter(Mandatory=$true)][string]$Path,
+    [Parameter(Mandatory=$true)][string]$Marker,   # text after "devbox: " in the opening comment
+    [Parameter(Mandatory=$true)][string]$Snippet,
+    [Parameter(Mandatory=$true)][string]$Label
+  )
+  # Rewrites the block in place rather than only appending when absent: profiles
+  # written by an earlier run already carry the marker, so an append-only check
+  # silently strands them on the old block whenever this snippet changes.
+  $dir = Split-Path $Path
+  if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+
+  $block = $Snippet.Trim()
+  $content = if (Test-Path $Path) { Get-Content $Path -Raw } else { "" }
+  $pattern = "(?ms)^# --- devbox: $([regex]::Escape($Marker)).*?^# --- end devbox block ---"
+
+  if ($content -match $pattern) {
+    if ($Matches[0].Trim() -eq $block) {
+      Write-Host "✓ $Label block already current in: $Path" -ForegroundColor Green
+      return
+    }
+    Write-Host "→ Updating $Label block in: $Path" -ForegroundColor Cyan
+    # MatchEvaluator, not a replacement string — the snippet contains $ and \ that
+    # -replace would treat as capture-group references.
+    $updated = [regex]::Replace($content, $pattern, { param($m) $block })
+    Set-Content -Path $Path -Value $updated.TrimEnd() -Encoding UTF8
+  } else {
+    Write-Host "→ Adding $Label block to: $Path" -ForegroundColor Cyan
+    Add-Content -Path $Path -Value "`r`n$block" -Encoding UTF8
+  }
+  Write-Host "✓ $Label configured in: $Path" -ForegroundColor Green
+}
+
+function Get-PowerShellProfileTargets {
+  $docs = [Environment]::GetFolderPath("MyDocuments")
+  @(
+    @{ Profile = Join-Path $docs "WindowsPowerShell\Microsoft.PowerShell_profile.ps1"; Exe = "powershell" }
+    @{ Profile = Join-Path $docs "PowerShell\Microsoft.PowerShell_profile.ps1";        Exe = "pwsh" }
+  ) | Where-Object { Test-Command $_.Exe }
+}
+
 function Ensure-PowerShellExperience {
   Install-WingetPackage -Id "junegunn.fzf"
   # ListView prediction needs PSReadLine 2.2+ (Windows PowerShell 5.1 ships 2.0); PSFzf needs fzf.
@@ -580,10 +622,33 @@ if ((Get-Module PSReadLine).Version -ge [version]'2.2.0') {
 } elseif ((Get-Module PSReadLine).Version -ge [version]'2.1.0') {
   Set-PSReadLineOption -PredictionSource History
 }
-# PSReadLine colours Parameter/Operator tokens DarkGray by default, which is
-# nearly invisible on the OneHalfDark background. Give parameters a soft cyan
-# (OneHalfDark #56b6c2) and operators a readable grey.
-Set-PSReadLineOption -Colors @{ Parameter = "`e[38;2;86;182;194m"; Operator = 'Gray' }
+# PSReadLine's defaults lean on DarkGray and dim ANSI, which all but vanish on
+# the OneHalfDark background — script parameters and their arguments worst of
+# all. Re-map the syntax tokens onto the OneHalfDark palette. Scoped in & { }
+# so $e stays out of the session, and built from [char]27 rather than `e
+# because the `e escape is PowerShell 6+ only and this profile also runs on 5.1.
+& {
+  $e = [char]27
+  $colors = @{
+    Command   = "$e[38;2;97;175;239m"    # #61afef blue   — cmdlets, scripts, .\foo.ps1
+    Parameter = "$e[38;2;86;182;194m"    # #56b6c2 cyan   — -Switch names
+    Variable  = "$e[38;2;224;108;117m"   # #e06c75 red
+    String    = "$e[38;2;152;195;121m"   # #98c379 green
+    Number    = "$e[38;2;209;154;102m"   # #d19a66 orange
+    Type      = "$e[38;2;229;192;123m"   # #e5c07b yellow
+    Keyword   = "$e[38;2;198;120;221m"   # #c678dd magenta
+    Operator  = "$e[38;2;171;178;191m"   # #abb2bf foreground
+    Member    = "$e[38;2;220;223;228m"   # #dcdfe4 bright foreground
+    Default   = "$e[38;2;220;223;228m"   # bare arguments, paths
+    Comment   = "$e[38;2;127;132;142m"   # #7f848e — deliberately quiet
+  }
+  # InlinePrediction arrived in PSReadLine 2.1; the 2.0 that ships in-box with
+  # Windows PowerShell 5.1 throws "not a valid color property" on it.
+  if ((Get-Module PSReadLine).Version -ge [version]'2.1.0') {
+    $colors.InlinePrediction = "$e[38;2;92;99;112m"   # #5c6370 — dimmer than any real token
+  }
+  Set-PSReadLineOption -Colors $colors
+}
 if (Get-Module -ListAvailable PSFzf) {
   Import-Module PSFzf
   Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r'
@@ -591,25 +656,9 @@ if (Get-Module -ListAvailable PSFzf) {
 # --- end devbox block ---
 '@
 
-  $docs = [Environment]::GetFolderPath("MyDocuments")
-  $targets = @(
-    @{ Profile = Join-Path $docs "WindowsPowerShell\Microsoft.PowerShell_profile.ps1"; Exe = "powershell" }
-    @{ Profile = Join-Path $docs "PowerShell\Microsoft.PowerShell_profile.ps1";        Exe = "pwsh" }
-  )
-  foreach ($t in $targets) {
-    if (-not (Test-Command $t.Exe)) { continue }
-
-    $dir = Split-Path $t.Profile
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-
-    $content = if (Test-Path $t.Profile) { Get-Content $t.Profile -Raw } else { "" }
-    if ($content -match "devbox: PSReadLine predictions") {
-      Write-Host "✓ PSReadLine/PSFzf block already in: $($t.Profile)" -ForegroundColor Green
-      continue
-    }
-    Write-Host "→ Adding PSReadLine/PSFzf block to: $($t.Profile)" -ForegroundColor Cyan
-    Add-Content -Path $t.Profile -Value $snippet -Encoding UTF8
-    Write-Host "✓ PowerShell experience configured in: $($t.Profile)" -ForegroundColor Green
+  foreach ($t in Get-PowerShellProfileTargets) {
+    Set-ManagedProfileBlock -Path $t.Profile -Marker "PSReadLine predictions" `
+      -Snippet $snippet -Label "PSReadLine/PSFzf"
   }
 }
 
@@ -760,25 +809,9 @@ function Invoke-Starship-PreCommand {
 # --- end devbox block ---
 '@
 
-  $docs = [Environment]::GetFolderPath("MyDocuments")
-  $targets = @(
-    @{ Profile = Join-Path $docs "WindowsPowerShell\Microsoft.PowerShell_profile.ps1"; Exe = "powershell" }
-    @{ Profile = Join-Path $docs "PowerShell\Microsoft.PowerShell_profile.ps1";        Exe = "pwsh" }
-  )
-  foreach ($t in $targets) {
-    if (-not (Test-Command $t.Exe)) { continue }
-
-    $dir = Split-Path $t.Profile
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-
-    $content = if (Test-Path $t.Profile) { Get-Content $t.Profile -Raw } else { "" }
-    if ($content -match "devbox: tab title") {
-      Write-Host "✓ Tab-title block already in: $($t.Profile)" -ForegroundColor Green
-      continue
-    }
-    Write-Host "→ Adding tab-title block to: $($t.Profile)" -ForegroundColor Cyan
-    Add-Content -Path $t.Profile -Value $snippet -Encoding UTF8
-    Write-Host "✓ Tab title follows the current directory in: $($t.Profile)" -ForegroundColor Green
+  foreach ($t in Get-PowerShellProfileTargets) {
+    Set-ManagedProfileBlock -Path $t.Profile -Marker "tab title" `
+      -Snippet $snippet -Label "Tab-title"
   }
 }
 
