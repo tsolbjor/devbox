@@ -279,8 +279,20 @@ update_npm_globals() {
     echo "✓ npm not found, skipping"
     return
   fi
-  echo "→ Updating global npm packages"
-  npm update -g
+  # setup-ubuntu.sh installs globals with `sudo npm install -g`, so the global
+  # prefix is root-owned and a bare `npm update -g` dies with EACCES the moment an
+  # update is actually available. Only reach for sudo when the prefix really isn't
+  # ours — a user-level prefix (npm config set prefix ~/...) must update unelevated,
+  # or root would rewrite that tree's ownership out from under the user.
+  local prefix
+  prefix="$(npm prefix -g 2>/dev/null || true)"
+  if [[ -n "$prefix" && ! -w "${prefix}/lib/node_modules" ]]; then
+    echo "→ Updating global npm packages (root-owned prefix: $prefix)"
+    sudo npm update -g
+  else
+    echo "→ Updating global npm packages"
+    npm update -g
+  fi
   echo "✓ global npm packages up to date"
 }
 

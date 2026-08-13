@@ -76,6 +76,12 @@ ZSH_AUTOSUGGEST_COLOR="${ZSH_AUTOSUGGEST_COLOR:-fg=#7f849c}"
 
 INSTALL_NODE="${INSTALL_NODE:-true}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"   # LTS; https://nodejs.org/en/about/previous-releases
+
+# Agentic CLIs installed as npm globals by ensure_node (so they need INSTALL_NODE).
+# Both land in the root-owned global prefix like ncu does, so their own in-place
+# self-update is disabled — `update-ubuntu.sh` bumps them with the other globals.
+INSTALL_CLAUDE_CODE="${INSTALL_CLAUDE_CODE:-true}"   # `claude` — @anthropic-ai/claude-code
+INSTALL_CODEX="${INSTALL_CODEX:-true}"               # `codex`  — @openai/codex
 CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-true}"   # set false on native Linux (not WSL)
 WSL_ENABLE_SYSTEMD="${WSL_ENABLE_SYSTEMD:-true}"   # requires Windows 11 22H2+ / WSL 2.0
 SET_ZSH_DEFAULT="${SET_ZSH_DEFAULT:-true}"
@@ -374,12 +380,35 @@ ensure_node() {
     echo "✓ node installed ($(node --version))"
   fi
 
+  # The literal `npm install -g <package>` calls below are what audit-ubuntu.sh
+  # greps out as the expected set of globals — keep them literal, not built from a
+  # variable, or the audit reports every global as unexpected drift.
   if ensure_command ncu; then
     echo "✓ ncu already installed"
   else
     echo "→ Installing ncu (npm-check-updates)"
     sudo npm install -g npm-check-updates
     echo "✓ ncu installed"
+  fi
+
+  if [[ "$INSTALL_CLAUDE_CODE" == "true" ]]; then
+    if ensure_command claude; then
+      echo "✓ Claude Code already installed"
+    else
+      echo "→ Installing Claude Code (@anthropic-ai/claude-code)"
+      sudo npm install -g @anthropic-ai/claude-code
+      echo "✓ Claude Code installed — run 'claude' to sign in"
+    fi
+  fi
+
+  if [[ "$INSTALL_CODEX" == "true" ]]; then
+    if ensure_command codex; then
+      echo "✓ Codex already installed"
+    else
+      echo "→ Installing Codex (@openai/codex)"
+      sudo npm install -g @openai/codex
+      echo "✓ Codex installed — run 'codex' to sign in"
+    fi
   fi
 }
 
@@ -1129,7 +1158,7 @@ if [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]]; then
 fi
 
 if [[ "$INSTALL_NODE" == "true" ]]; then
-  log "Installing Node.js and ncu"
+  log "Installing Node.js and npm-global CLIs"
   ensure_node
 fi
 

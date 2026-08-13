@@ -23,6 +23,12 @@ $Config = @{
   InstallNode            = $true   # host Node for npm-global tooling (CDK, etc.)
   InstallAzureFunctionsCoreTools = $true   # `func` CLI via winget (self-updates on `winget upgrade`)
 
+  # Agentic CLIs. Both ship first-party winget packages of native builds (Codex's is
+  # the Rust binary, not the npm JS wrapper), so they carry no Node dependency and
+  # ride `winget upgrade --all` in update-windows.ps1 like every other app here.
+  InstallClaudeCode      = $true   # `claude` — Anthropic.ClaudeCode
+  InstallCodex           = $true   # `codex`  — OpenAI.Codex
+
   # Starship — cross-shell prompt engine; configures PowerShell profiles for PS5 and PS7
   Starship = @{
     Configure = $true
@@ -911,6 +917,8 @@ function Ensure-NodeAndNcu {
     return
   }
 
+  # Keep the `npm install -g` call below literal, not built from a variable —
+  # audit-windows.ps1 regexes it out as the expected set of npm globals.
   if (Test-Command "ncu") {
     Write-Host "✓ ncu already installed" -ForegroundColor Green
   } else {
@@ -1119,6 +1127,8 @@ if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.Power
 if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
 if ($Config.InstallNode)            { Ensure-NodeAndNcu }
 if ($Config.InstallAzureFunctionsCoreTools) { Install-WingetPackage -Id "Microsoft.Azure.FunctionsCoreTools" }
+if ($Config.InstallClaudeCode)      { Install-WingetPackage -Id "Anthropic.ClaudeCode" }
+if ($Config.InstallCodex)           { Install-WingetPackage -Id "OpenAI.Codex" }
 
 if ($Config.Fonts.Count -gt 0) {
   Show-Progress "Installing fonts"
