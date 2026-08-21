@@ -11,6 +11,7 @@ UPDATE_ZOXIDE="${UPDATE_ZOXIDE:-true}"
 UPDATE_DELTA="${UPDATE_DELTA:-true}"
 UPDATE_LAZYGIT="${UPDATE_LAZYGIT:-true}"
 UPDATE_STERN="${UPDATE_STERN:-true}"
+UPDATE_ASPIRE="${UPDATE_ASPIRE:-true}"               # aspire CLI (re-runs the aspire.dev installer)
 UPDATE_K9S="${UPDATE_K9S:-true}"
 UPDATE_KUBECTX="${UPDATE_KUBECTX:-true}"
 UPDATE_OMZ="${UPDATE_OMZ:-true}"                   # oh-my-zsh self-update (git pull of ~/.oh-my-zsh)
@@ -31,6 +32,7 @@ Usage: update-ubuntu.sh [options]
   --skip-delta         Skip git-delta update
   --skip-lazygit       Skip lazygit update
   --skip-stern         Skip stern update
+  --skip-aspire        Skip Aspire CLI update
   --skip-k9s           Skip k9s update
   --skip-kubectx       Skip kubectx/kubens update
   --skip-omz           Skip oh-my-zsh update
@@ -48,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --skip-delta)        UPDATE_DELTA=false ;;
     --skip-lazygit)      UPDATE_LAZYGIT=false ;;
     --skip-stern)        UPDATE_STERN=false ;;
+    --skip-aspire)       UPDATE_ASPIRE=false ;;
     --skip-k9s)          UPDATE_K9S=false ;;
     --skip-kubectx)      UPDATE_KUBECTX=false ;;
     --skip-omz)          UPDATE_OMZ=false ;;
@@ -194,6 +197,30 @@ update_stern() {
   echo "✓ stern updated to $num"
 }
 
+# The Aspire CLI has no self-update: `aspire update` updates the *project's*
+# integrations, not the CLI. Refreshing means re-running the installer, which is a
+# ~150 MB download — hence the version check first. Release tags on
+# microsoft/aspire are the CLI versions, and `aspire --version` reports
+# "13.5.0+<sha>", so trimming the tag prefix and the build suffix compares cleanly.
+update_aspire() {
+  if ! ensure_command aspire; then
+    echo "✓ aspire not installed, skipping"
+    return
+  fi
+  local current latest num
+  current=$(aspire --version 2>/dev/null | head -1 | cut -d+ -f1)
+  latest=$(get_github_latest_tag "microsoft/aspire")   # vX.Y.Z
+  num="${latest#v}"
+  if [[ "$current" == "$num" ]]; then
+    echo "✓ aspire already at latest ($current)"
+    return
+  fi
+  echo "→ Updating aspire: $current → $num"
+  # Same flags as ensure_aspire in setup-ubuntu.sh: own directory, no rc-file edits.
+  curl -fsSL https://aspire.dev/install.sh | bash -s -- --skip-path --install-path "$HOME/.aspire/bin"
+  echo "✓ aspire updated to $(aspire --version 2>/dev/null | head -1)"
+}
+
 update_k9s() {
   if ! ensure_command k9s; then
     echo "✓ k9s not installed, skipping"
@@ -317,6 +344,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_DELTA"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_LAZYGIT"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_STERN"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_ASPIRE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_K9S"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_KUBECTX"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_OMZ"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -329,6 +357,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_DELTA"       == "true" ]] && run_step "Updating git-delta"         --skip-delta        update_delta
 [[ "$UPDATE_LAZYGIT"     == "true" ]] && run_step "Updating lazygit"           --skip-lazygit      update_lazygit
 [[ "$UPDATE_STERN"       == "true" ]] && run_step "Updating stern"             --skip-stern        update_stern
+[[ "$UPDATE_ASPIRE"      == "true" ]] && run_step "Updating Aspire CLI"        --skip-aspire       update_aspire
 [[ "$UPDATE_K9S"         == "true" ]] && run_step "Updating k9s"               --skip-k9s          update_k9s
 [[ "$UPDATE_KUBECTX"     == "true" ]] && run_step "Updating kubectx/kubens"    --skip-kubectx      update_kubectx
 [[ "$UPDATE_OMZ"         == "true" ]] && run_step "Updating oh-my-zsh"          --skip-omz          update_omz

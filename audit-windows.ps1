@@ -321,6 +321,33 @@ if ($Config.CheckConfigFiles) {
     }
   }
 
+  # Claude Code's winget self-upgrade switch (~/.claude/settings.json is Claude
+  # Code's own file, so setup merges this one key in rather than owning the file).
+  if ($setup.InstallClaudeCode -and $setup.ClaudeCodeAutoUpdate) {
+    $ccPath = Join-Path $env:USERPROFILE ".claude\settings.json"
+    $ccVal = $null
+    if (Test-Path $ccPath) {
+      $ccJson = $null
+      try { $ccJson = Get-Content $ccPath -Raw | ConvertFrom-Json }
+      catch { Report-Warn "~/.claude/settings.json is not valid JSON — cannot check auto-update." }
+      # Strict mode makes a missing property a terminating error, so walk both
+      # levels explicitly instead of chaining .env.CLAUDE_CODE_...
+      # Filtered, not .PSObject.Properties.Name: strict mode makes member
+      # enumeration over an empty property set a terminating error.
+      if ($ccJson -and ($ccJson.PSObject.Properties | Where-Object { $_.Name -eq "env" })) {
+        $ccProp = $ccJson.env.PSObject.Properties |
+          Where-Object { $_.Name -eq "CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE" }
+        if ($ccProp) { $ccVal = $ccProp.Value }
+      }
+    }
+    if ("$ccVal" -ne "1") {
+      Report-Drift "Claude Code winget auto-upgrade is off (env CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE = '$ccVal')." @(
+        "fix: .\setup-windows.ps1",
+        "keep it off: set ClaudeCodeAutoUpdate = `$false in setup-windows.ps1"
+      )
+    } else { Report-Ok "Claude Code upgrades its own winget package." }
+  }
+
   # Git global config keys setup manages.
   if ($setup.GitConfig.Configure -and (Test-Command "git")) {
     $gitWant = @{

@@ -77,10 +77,12 @@ ZSH_AUTOSUGGEST_COLOR="${ZSH_AUTOSUGGEST_COLOR:-fg=#7f849c}"
 INSTALL_NODE="${INSTALL_NODE:-true}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"   # LTS; https://nodejs.org/en/about/previous-releases
 
-# Agentic CLIs installed as npm globals by ensure_node (so they need INSTALL_NODE).
-# Both land in the root-owned global prefix like ncu does, so their own in-place
-# self-update is disabled — `update-ubuntu.sh` bumps them with the other globals.
-INSTALL_CLAUDE_CODE="${INSTALL_CLAUDE_CODE:-true}"   # `claude` — @anthropic-ai/claude-code
+# Agentic CLIs.
+# Claude Code comes from its own installer (ensure_claude_code) and needs no Node.
+# Codex is an npm global installed by ensure_node (so it needs INSTALL_NODE): it
+# lands in the root-owned global prefix like ncu does, so its own in-place
+# self-update is disabled — `update-ubuntu.sh` bumps it with the other globals.
+INSTALL_CLAUDE_CODE="${INSTALL_CLAUDE_CODE:-true}"   # `claude` — native install, self-updating
 INSTALL_CODEX="${INSTALL_CODEX:-true}"               # `codex`  — @openai/codex
 CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-true}"   # set false on native Linux (not WSL)
 WSL_ENABLE_SYSTEMD="${WSL_ENABLE_SYSTEMD:-true}"   # requires Windows 11 22H2+ / WSL 2.0
@@ -89,6 +91,7 @@ SET_GIT_DEFAULTS="${SET_GIT_DEFAULTS:-true}"
 ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
 INSTALL_DOTNET="${INSTALL_DOTNET:-true}"
 DOTNET_SDK_VERSION="${DOTNET_SDK_VERSION:-8.0}"   # e.g. 8.0 (LTS) or 10.0; https://dotnet.microsoft.com/download
+INSTALL_ASPIRE="${INSTALL_ASPIRE:-true}"          # `aspire` CLI from aspire.dev (needs a .NET SDK to run an AppHost)
 INSTALL_PYTHON="${INSTALL_PYTHON:-true}"          # python3 venv/pip + pipx + uv
 DOCKER_CHECK="${DOCKER_CHECK:-true}"              # verify Rancher Desktop's docker is wired into WSL
 GIT_SIGN_COMMITS="${GIT_SIGN_COMMITS:-true}"      # SSH-sign commits/tags with the generated key
@@ -391,16 +394,6 @@ ensure_node() {
     echo "✓ ncu installed"
   fi
 
-  if [[ "$INSTALL_CLAUDE_CODE" == "true" ]]; then
-    if ensure_command claude; then
-      echo "✓ Claude Code already installed"
-    else
-      echo "→ Installing Claude Code (@anthropic-ai/claude-code)"
-      sudo npm install -g @anthropic-ai/claude-code
-      echo "✓ Claude Code installed — run 'claude' to sign in"
-    fi
-  fi
-
   if [[ "$INSTALL_CODEX" == "true" ]]; then
     if ensure_command codex; then
       echo "✓ Codex already installed"
@@ -410,6 +403,35 @@ ensure_node() {
       echo "✓ Codex installed — run 'codex' to sign in"
     fi
   fi
+}
+
+# Claude Code, from Anthropic's installer rather than as an npm global. The native
+# install lands in ~/.local/bin and updates itself in the background, which is the
+# upstream-recommended path; the npm route cannot self-update here, because node
+# comes from apt and its global prefix is root-owned (the one case where Claude
+# Code switches its own updater off). No Node dependency either — npm ships the
+# same native binary, it just wraps it in a package.
+ensure_claude_code() {
+  # Migrate machines set up before this switch: two installs on one PATH means the
+  # winner is whichever directory comes first, and only the native one can update
+  # itself. `hash -r` so the shell forgets the just-removed /usr/bin/claude.
+  # `npm ls -g` exits non-zero on unrelated grumbles (extraneous deps), and with
+  # pipefail that would swallow a match — so capture first, match second.
+  local npm_globals=""
+  ensure_command npm && npm_globals="$(npm ls -g --depth=0 --parseable 2>/dev/null || true)"
+  if [[ -n "$npm_globals" ]] && grep -q 'claude-code$' <<< "$npm_globals"; then
+    echo "→ Removing the npm-global Claude Code (superseded by the native install)"
+    sudo npm uninstall -g @anthropic-ai/claude-code
+    hash -r 2>/dev/null || true
+  fi
+
+  if ensure_command claude; then
+    echo "✓ Claude Code already installed ($(claude --version 2>/dev/null | head -1)) — it self-updates"
+    return
+  fi
+  echo "→ Installing Claude Code (native installer)"
+  curl -fsSL https://claude.ai/install.sh | bash
+  echo "✓ Claude Code installed — run 'claude' to sign in"
 }
 
 # Append `eval "$(<tool> init <shell>)"` to bash/zsh rc files (idempotent).
@@ -913,6 +935,43 @@ ensure_dotnet() {
   echo "✓ .NET SDK installed ($(dotnet --version 2>/dev/null))"
 }
 
+# Aspire CLI. Installed from aspire.dev rather than as a `dotnet tool`: the payload
+# is a self-contained build, so it neither tracks DOTNET_SDK_VERSION nor needs the
+# SDK present to install (only `aspire run`/`publish` do).
+#
+# Two deliberate deviations from the upstream one-liner:
+#   --skip-path — the installer appends an unmanaged `export PATH=` line to the rc
+#     file of whichever shell it runs under. That is bash here, so zsh (the default
+#     shell) would never see the CLI.
+#   --install-path + a shim — the archive holds more than the binary
+#     (Aspire.TypeSystem.xml rides along), so it cannot be dropped into a bin
+#     directory wholesale. It keeps its own directory and gets a ~/.local/bin
+#     symlink, the same shape as the bat/fd shims. /proc/self/exe resolves the
+#     symlink, so the binary still finds its siblings.
+ensure_aspire() {
+  local bin_dir="$HOME/.aspire/bin"
+  if ensure_command aspire; then
+    echo "✓ aspire already installed ($(aspire --version 2>/dev/null | head -1))"
+  elif [[ -x "$bin_dir/aspire" ]]; then
+    echo "✓ aspire already installed ($("$bin_dir/aspire" --version 2>/dev/null | head -1)), not yet on PATH"
+  else
+    echo "→ Installing Aspire CLI"
+    curl -fsSL https://aspire.dev/install.sh | bash -s -- --skip-path --install-path "$bin_dir"
+    echo "✓ aspire installed ($("$bin_dir/aspire" --version 2>/dev/null | head -1))"
+  fi
+
+  # Shim into ~/.local/bin so both shells pick it up (idempotent).
+  if [[ -x "$bin_dir/aspire" ]]; then
+    if [[ -L "$HOME/.local/bin/aspire" ]]; then
+      echo "✓ aspire shim already exists"
+    else
+      echo "→ Creating aspire shim at ~/.local/bin/aspire"
+      mkdir -p "$HOME/.local/bin"
+      ln -sf "$bin_dir/aspire" "$HOME/.local/bin/aspire"
+    fi
+  fi
+}
+
 ensure_python() {
   for p in python3 python3-venv python3-pip pipx; do
     ensure_pkg "$p"
@@ -987,7 +1046,9 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
 [[ "$INSTALL_ZSH_PLUGINS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_NODE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_CLAUDE_CODE" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_DOTNET"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_ASPIRE"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_PYTHON"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$DOCKER_CHECK"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$ENSURE_SSH_KEY"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -1162,9 +1223,19 @@ if [[ "$INSTALL_NODE" == "true" ]]; then
   ensure_node
 fi
 
+if [[ "$INSTALL_CLAUDE_CODE" == "true" ]]; then
+  log "Installing Claude Code"
+  ensure_claude_code
+fi
+
 if [[ "$INSTALL_DOTNET" == "true" ]]; then
   log "Installing .NET SDK"
   ensure_dotnet
+fi
+
+if [[ "$INSTALL_ASPIRE" == "true" ]]; then
+  log "Installing Aspire CLI"
+  ensure_aspire
 fi
 
 if [[ "$INSTALL_PYTHON" == "true" ]]; then

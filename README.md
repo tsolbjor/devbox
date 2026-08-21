@@ -47,7 +47,7 @@ Installs and configures:
 
 | Category | What gets set up |
 |---|---|
-| Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip, Node.js (host), Azure Functions Core Tools |
+| Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip, Node.js (host), Azure Functions Core Tools, Aspire CLI |
 | Fonts | Cascadia Code, JetBrains Mono Nerd Font |
 | Cloud CLIs | Azure CLI (add AWS CLI / Google Cloud SDK via `CloudCLIs`) |
 | VS Code | Remote WSL, Dev Containers, Docker extensions |
@@ -85,7 +85,8 @@ Installs and configures:
 | Shell | zsh (set as default), Starship, fzf, zoxide, zsh-autosuggestions + zsh-syntax-highlighting |
 | Shell UX | 200 000-line history for bash and zsh (flushed per command), inline suggestions in a readable colour, PSReadLine-style accept keys (`→`, `Ctrl+→`, `Tab`), `Ctrl+R` history picker |
 | Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, wget, zip, git-delta, lazygit, GitHub CLI, Node.js |
-| Languages | .NET SDK, Python (venv/pip/pipx/uv) |
+| Agentic CLIs | Claude Code (native install, self-updating), Codex (npm global) |
+| Languages | .NET SDK, Aspire CLI, Python (venv/pip/pipx/uv) |
 | Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern |
 | Containers | verifies Rancher Desktop's docker is wired into WSL |
 | Git | user config (auto-detected from Windows), defaults, SSH commit signing |

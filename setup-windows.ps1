@@ -22,12 +22,20 @@ $Config = @{
   Install7Zip            = $true
   InstallNode            = $true   # host Node for npm-global tooling (CDK, etc.)
   InstallAzureFunctionsCoreTools = $true   # `func` CLI via winget (self-updates on `winget upgrade`)
+  InstallAspire          = $true   # `aspire` CLI via winget (Microsoft.Aspire). Self-contained binary —
+                                   # a .NET SDK is only needed to build/run an AppHost, not to install it.
 
   # Agentic CLIs. Both ship first-party winget packages of native builds (Codex's is
   # the Rust binary, not the npm JS wrapper), so they carry no Node dependency and
   # ride `winget upgrade --all` in update-windows.ps1 like every other app here.
   InstallClaudeCode      = $true   # `claude` — Anthropic.ClaudeCode
   InstallCodex           = $true   # `codex`  — OpenAI.Codex
+
+  # Claude Code ships far more often than a maintenance run of update-windows.ps1,
+  # and winget installs do not auto-update. This lets Claude Code run its own
+  # `winget upgrade Anthropic.ClaudeCode` in the background when a release lands,
+  # so it stays current without leaving the winget inventory the audit tracks.
+  ClaudeCodeAutoUpdate   = $true
 
   # Starship — cross-shell prompt engine; configures PowerShell profiles for PS5 and PS7
   Starship = @{
@@ -898,6 +906,55 @@ function Ensure-RancherDesktopConfig {
   }
 }
 
+function Ensure-ClaudeCodeAutoUpdate {
+  # Merged into ~/.claude/settings.json, never replacing it: Claude Code writes to
+  # this file itself (/config, auth state), the same reason Rancher Desktop's
+  # settings.json is merged rather than regenerated.
+  $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
+  $settingsDir  = Split-Path $settingsPath -Parent
+  if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
+
+  $settings = $null
+  if (Test-Path $settingsPath) {
+    $raw = Get-Content $settingsPath -Raw
+    if ($raw -and $raw.Trim()) {
+      try { $settings = $raw | ConvertFrom-Json }
+      catch {
+        Write-Warning "$settingsPath is not valid JSON — leaving it alone. Add `"CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE`": `"1`" to its env block by hand."
+        return
+      }
+    }
+  }
+  if ($null -eq $settings) { $settings = [PSCustomObject]@{} }
+
+  # Filter the property list rather than reading .PSObject.Properties.Name: strict
+  # mode turns member enumeration over an empty property set into a terminating
+  # error, which is exactly the fresh-`{}`-settings case.
+  if (-not ($settings.PSObject.Properties | Where-Object { $_.Name -eq "env" })) {
+    $settings | Add-Member -NotePropertyName "env" -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  $envBlock = $settings.env
+  $current  = $envBlock.PSObject.Properties | Where-Object { $_.Name -eq "CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE" }
+  if ($current -and "$($current.Value)" -eq "1") {
+    Write-Host "✓ Claude Code already set to upgrade its own winget package." -ForegroundColor Green
+    return
+  }
+
+  $envBlock | Add-Member -NotePropertyName "CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE" -NotePropertyValue "1" -Force
+  Write-Host "→ Enabling Claude Code winget auto-upgrade: $settingsPath" -ForegroundColor Cyan
+  # Not Set-Content -Encoding UTF8 like the rest of this script: under Windows
+  # PowerShell 5.1 that writes a BOM, and a BOM ahead of `{` breaks strict JSON
+  # parsers. WriteAllText with a no-BOM encoding behaves the same on PS 5.1 and 7.
+  [System.IO.File]::WriteAllText(
+    $settingsPath,
+    ($settings | ConvertTo-Json -Depth 20),
+    (New-Object System.Text.UTF8Encoding($false))
+  )
+  # The upgrade can still fail while claude.exe is running (Windows locks the exe);
+  # Claude Code then falls back to showing the manual command.
+  Write-Host "✓ Claude Code will upgrade its winget package in the background." -ForegroundColor Green
+}
+
 function Ensure-NodeAndNcu {
   # If Node is already on PATH (installed by any means), skip the winget install.
   # Re-running the MSI over an install winget doesn't track produces a 1603
@@ -1099,6 +1156,7 @@ if ($Config.ConfigurePwshExtras)  { $totalSteps++ }
 if ($Config.ShowCwdInTabTitle)    { $totalSteps++ }
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) { $totalSteps++ }
 if ($Config.RancherDesktopConfig.Configure) { $totalSteps++ }
+if ($Config.InstallClaudeCode -and $Config.ClaudeCodeAutoUpdate) { $totalSteps++ }
 $script:totalSteps = $totalSteps
 
 Show-Progress "Detecting system resources"
@@ -1127,6 +1185,7 @@ if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.Power
 if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
 if ($Config.InstallNode)            { Ensure-NodeAndNcu }
 if ($Config.InstallAzureFunctionsCoreTools) { Install-WingetPackage -Id "Microsoft.Azure.FunctionsCoreTools" }
+if ($Config.InstallAspire)           { Install-WingetPackage -Id "Microsoft.Aspire" }
 if ($Config.InstallClaudeCode)      { Install-WingetPackage -Id "Anthropic.ClaudeCode" }
 if ($Config.InstallCodex)           { Install-WingetPackage -Id "OpenAI.Codex" }
 
@@ -1192,6 +1251,11 @@ if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {
 if ($Config.RancherDesktopConfig.Configure) {
   Show-Progress "Configuring Rancher Desktop"
   Ensure-RancherDesktopConfig -RdConfig $Config.RancherDesktopConfig
+}
+
+if ($Config.InstallClaudeCode -and $Config.ClaudeCodeAutoUpdate) {
+  Show-Progress "Configuring Claude Code auto-update"
+  Ensure-ClaudeCodeAutoUpdate
 }
 
 Show-Progress "Applying system settings"
