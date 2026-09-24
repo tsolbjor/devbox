@@ -18,6 +18,7 @@ $Config = @{
     DefaultBranch   = "main"
     PullRebase      = "false"
     AutoSetupRemote = "true"
+    UseDelta        = $true    # core.pager + interactive.diffFilter, matching ensure_delta on Ubuntu
   }
   Install7Zip            = $true
   InstallNode            = $true   # host Node for npm-global tooling (CDK, etc.)
@@ -25,17 +26,14 @@ $Config = @{
   InstallAspire          = $true   # `aspire` CLI via winget (Microsoft.Aspire). Self-contained binary —
                                    # a .NET SDK is only needed to build/run an AppHost, not to install it.
 
-  # Agentic CLIs. Both ship first-party winget packages of native builds (Codex's is
-  # the Rust binary, not the npm JS wrapper), so they carry no Node dependency and
-  # ride `winget upgrade --all` in update-windows.ps1 like every other app here.
-  InstallClaudeCode      = $true   # `claude` — Anthropic.ClaudeCode
+  # Agentic CLIs. Both are native builds (Codex's winget package is the Rust
+  # binary, not the npm JS wrapper), so neither carries a Node dependency. They
+  # differ in how they stay current: Claude Code comes from Anthropic's own
+  # installer and updates itself in the background (see Ensure-ClaudeCode), so it
+  # is the one app here outside winget; Codex has no self-updater and rides
+  # `winget upgrade --all` in update-windows.ps1 like every other app.
+  InstallClaudeCode      = $true   # `claude` — native install, self-updating
   InstallCodex           = $true   # `codex`  — OpenAI.Codex
-
-  # Claude Code ships far more often than a maintenance run of update-windows.ps1,
-  # and winget installs do not auto-update. This lets Claude Code run its own
-  # `winget upgrade Anthropic.ClaudeCode` in the background when a release lands,
-  # so it stays current without leaving the winget inventory the audit tracks.
-  ClaudeCodeAutoUpdate   = $true
 
   # Starship — cross-shell prompt engine; configures PowerShell profiles for PS5 and PS7
   Starship = @{
@@ -51,15 +49,35 @@ $Config = @{
   # profile name. Rides on Starship's pre-command hook, so it needs Starship above.
   ShowCwdInTabTitle = $true
 
+  # Modern CLI tools — the Windows half of what setup-ubuntu.sh installs, so a
+  # pwsh shell on the host has the same basics as the WSL one. Listed here rather
+  # than as individual Install* switches because they are all plain binaries that
+  # work the moment they are on PATH; zoxide and eza are deliberately absent, as
+  # both need a managed profile block to be useful.
+  CliTools = @(
+    "BurntSushi.ripgrep.MSVC",   # rg
+    "sharkdp.bat",               # bat
+    "sharkdp.fd",                # fd
+    "jqlang.jq",                 # jq
+    "dandavison.delta",          # git-delta — wired into git by GitConfig.UseDelta
+    "JesseDuffield.lazygit",     # lazygit
+    "GitHub.cli"                 # gh
+  )
+
   # Fonts (winget IDs)
   Fonts = @(
     "Microsoft.CascadiaCode",
     "NERD-Fonts.JetBrainsMono"
   )
 
-  # Cloud CLIs (remove any you don't need; add Amazon.AWSCLI / Google.CloudSDK if multi-cloud)
+  # Cloud CLIs (remove any you don't need; add Amazon.AWSCLI / Google.CloudSDK if multi-cloud).
+  # Azd provisions and deploys an Aspire AppHost; kubelogin is the Entra ID
+  # credential plugin kubectl shells out to — an Entra-integrated AKS cluster
+  # writes `exec: kubelogin` into the kubeconfig, so kubectl alone cannot log in.
   CloudCLIs = @(
-    "Microsoft.AzureCLI"
+    "Microsoft.AzureCLI",
+    "Microsoft.Azd",
+    "Microsoft.Azure.Kubelogin"
   )
 
   # WezTerm appearance — written to a managed ~/.wezterm.lua (overwritten on rerun)
@@ -82,9 +100,10 @@ $Config = @{
     ScrollbackLines    = 30000
     TabTitleShowCwd    = $true   # tab titles show the pane's current directory, not the program name
     TabMaxWidth        = 28      # tab title width before truncation (WezTerm default is 16)
-    # Quick shell-switching: the (+) tab-bar dropdown lists these, and Ctrl+Shift+1/2/3
-    # spawn cmd / pwsh / Ubuntu directly. Ctrl+Shift+L opens the launcher menu.
-    PwshStartDir       = "D:\code"       # pwsh (Ctrl+Shift+2) opens here
+    # Quick shell-switching: the (+) tab-bar dropdown lists these, and Ctrl+Shift+1/2
+    # spawn pwsh / Ubuntu directly. Ctrl+Shift+L opens the launcher menu.
+    # Splits are Ctrl+Shift+Alt+<arrow> and inherit the pane's domain and cwd.
+    PwshStartDir       = "D:\code"       # pwsh (Ctrl+Shift+1) opens here
   }
 
   # WSL / Ubuntu
@@ -679,8 +698,9 @@ if (Get-Module -ListAvailable PSFzf) {
 function Ensure-WezTermConfig {
   param(
     [Parameter(Mandatory=$true)]$WtConfig,
-    [string]$WslDistro = "Ubuntu",   # WSL distro used by the Ubuntu launcher entry / Ctrl+Shift+3
-    [bool]$MakeWslDefault = $true     # open the WSL distro by default
+    [string]$WslDistro = "Ubuntu",   # WSL distro used by the Ubuntu launcher entry / Ctrl+Shift+2
+    [bool]$MakeWslDefault = $true,    # open the WSL distro by default
+    [bool]$UsePwsh = $true            # local-domain panes run pwsh instead of WezTerm's cmd.exe default
   )
 
   $resolvedFontFace = Resolve-InstalledFontFace -PreferredFontFace $WtConfig.FontFace
@@ -699,14 +719,24 @@ function Ensure-WezTermConfig {
   $pwshDirLua = $WtConfig.PwshStartDir -replace '\\', '\\'
 
   # Tab titles. Literal here-string: the Lua below contains $ and \ that must survive verbatim.
+  # WezTerm's local-domain default on Windows is %COMSPEC%, i.e. cmd.exe — so a
+  # pane split off a pwsh pane would come up in cmd unless default_prog says
+  # otherwise. Only set when setup actually installs pwsh: pointing default_prog
+  # at a missing binary would break the local domain outright.
+  $defaultProgLine = if ($UsePwsh) {
+    "config.default_prog = { 'pwsh.exe' }"
+  } else {
+    "-- config.default_prog left unset (local panes use %COMSPEC%, normally cmd.exe)"
+  }
+
   $tabTitleLua = "-- Tab titles left at the WezTerm default (the program/shell title)."
   if ($WtConfig.TabTitleShowCwd) {
     $tabTitleLua = @'
 -- Tab titles show the active pane's current directory instead of the program
--- name. Windows panes: WezTerm reads the cwd from the shell's own process.
--- WSL panes: the cwd arrives as OSC 7 from the managed .bashrc block that
--- setup-ubuntu.sh installs — a Windows path there is wsl.exe's own cwd, not
--- the shell's, so it is ignored and the pane title is used instead.
+-- name. Both Windows and WSL panes report their cwd as OSC 7, from the managed
+-- Invoke-Starship-PreCommand block setup-windows.ps1 writes and the .bashrc/.zshrc
+-- block setup-ubuntu.sh installs. A Windows path on a WSL pane is wsl.exe's own
+-- cwd, not the shell's, so it is ignored and the pane title is used instead.
 local function pane_dir(pane)
   local cwd = pane.current_working_dir
   if not cwd then return nil end
@@ -753,6 +783,8 @@ config.hide_tab_bar_if_only_one_tab = true
 config.warn_about_missing_glyphs = false
 config.tab_max_width = $($WtConfig.TabMaxWidth)
 
+$defaultProgLine
+
 $tabTitleLua
 
 -- On launch, open two tabs: Ubuntu (default WSL domain) + a Windows pwsh tab.
@@ -767,22 +799,34 @@ wezterm.on('gui-startup', function(cmd)
 end)
 
 -- Quick shell-switching. These appear in the (+) tab-bar dropdown / launcher,
--- and Ctrl+Shift+1/2/3 spawn them directly. Ctrl+Shift+L opens the launcher.
+-- and Ctrl+Shift+1/2 spawn them directly. Ctrl+Shift+L opens the launcher.
+-- No cmd entry: default_prog above makes pwsh the local shell, and cmd is still
+-- one `cmd` away inside it.
 config.launch_menu = {
-  { label = 'cmd',    args = { 'cmd.exe' }, domain = { DomainName = 'local' } },
   { label = 'pwsh',   args = { 'pwsh.exe' }, cwd = '$pwshDirLua', domain = { DomainName = 'local' } },
   { label = 'Ubuntu', domain = { DomainName = 'WSL:$WslDistro' } },
 }
 
 config.keys = {
   -- Shell switching
-  { key = '1', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'cmd.exe' }, domain = { DomainName = 'local' } } },
-  { key = '2', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'pwsh.exe' }, cwd = '$pwshDirLua', domain = { DomainName = 'local' } } },
-  { key = '3', mods = 'CTRL|SHIFT', action = act.SpawnTab { DomainName = 'WSL:$WslDistro' } },
+  { key = '1', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'pwsh.exe' }, cwd = '$pwshDirLua', domain = { DomainName = 'local' } } },
+  { key = '2', mods = 'CTRL|SHIFT', action = act.SpawnTab { DomainName = 'WSL:$WslDistro' } },
   { key = 'l', mods = 'CTRL|SHIFT', action = act.ShowLauncher },
-  -- Panes: Ctrl+Shift+D split right, Ctrl+Shift+E split down, arrows to move, Z to zoom
-  { key = 'd', mods = 'CTRL|SHIFT', action = act.SplitHorizontal { domain = 'CurrentPaneDomain' } },
-  { key = 'e', mods = 'CTRL|SHIFT', action = act.SplitVertical { domain = 'CurrentPaneDomain' } },
+
+  -- Splits: Ctrl+Shift+Alt+<arrow>, in every direction. SplitPane takes a
+  -- direction, unlike the legacy SplitHorizontal/SplitVertical actions that can
+  -- only ever split right and down. The new pane inherits the current pane's
+  -- domain and cwd, so one binding covers a pwsh pane and a WSL pane alike —
+  -- no `wezterm cli split-pane --cwd ...` from either side.
+  { key = 'LeftArrow',  mods = 'CTRL|SHIFT|ALT', action = act.SplitPane { direction = 'Left' } },
+  { key = 'RightArrow', mods = 'CTRL|SHIFT|ALT', action = act.SplitPane { direction = 'Right' } },
+  { key = 'UpArrow',    mods = 'CTRL|SHIFT|ALT', action = act.SplitPane { direction = 'Up' } },
+  { key = 'DownArrow',  mods = 'CTRL|SHIFT|ALT', action = act.SplitPane { direction = 'Down' } },
+  -- Kept for muscle memory: split right / split down.
+  { key = 'd', mods = 'CTRL|SHIFT', action = act.SplitPane { direction = 'Right' } },
+  { key = 'e', mods = 'CTRL|SHIFT', action = act.SplitPane { direction = 'Down' } },
+
+  -- Ctrl+Shift+<arrow> moves between panes, Z zooms one to fill the tab
   { key = 'LeftArrow',  mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Left' },
   { key = 'RightArrow', mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Right' },
   { key = 'UpArrow',    mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Up' },
@@ -815,10 +859,23 @@ function Ensure-ShellTabTitle {
 
 # --- devbox: tab title = current directory (managed block) ---
 function Invoke-Starship-PreCommand {
+  $loc = $null
+  try { $loc = Get-Location } catch { return }
   try {
-    $leaf = Split-Path -Leaf (Get-Location).Path
+    $leaf = Split-Path -Leaf $loc.Path
     if ($leaf) { $Host.UI.RawUI.WindowTitle = $leaf }
   } catch { }   # hosts with no console (ISE, redirected output) can't set a title
+  # OSC 7 reports the cwd itself, which is what WezTerm inherits when a pane is
+  # split. Without it WezTerm falls back to inspecting the shell's process, which
+  # it cannot do reliably for pwsh, and a new pane opens in the wrong directory.
+  # The bash/zsh counterpart is __devbox_term_cwd in setup-ubuntu.sh.
+  try {
+    if ($loc.Provider.Name -eq 'FileSystem') {
+      $url = ([uri]::new($loc.ProviderPath).AbsoluteUri) -replace '^file:///', "file://$env:COMPUTERNAME/"
+      $esc = [char]27
+      Write-Host -NoNewline "$esc]7;$url$esc\"
+    }
+  } catch { }   # non-filesystem providers (Cert:, HKLM:) have no meaningful URL
 }
 # --- end devbox block ---
 '@
@@ -906,53 +963,62 @@ function Ensure-RancherDesktopConfig {
   }
 }
 
-function Ensure-ClaudeCodeAutoUpdate {
-  # Merged into ~/.claude/settings.json, never replacing it: Claude Code writes to
-  # this file itself (/config, auth state), the same reason Rancher Desktop's
-  # settings.json is merged rather than regenerated.
-  $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
-  $settingsDir  = Split-Path $settingsPath -Parent
-  if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
-
-  $settings = $null
-  if (Test-Path $settingsPath) {
-    $raw = Get-Content $settingsPath -Raw
-    if ($raw -and $raw.Trim()) {
-      try { $settings = $raw | ConvertFrom-Json }
-      catch {
-        Write-Warning "$settingsPath is not valid JSON — leaving it alone. Add `"CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE`": `"1`" to its env block by hand."
-        return
-      }
-    }
+# Claude Code, from Anthropic's own installer rather than winget — the one app in
+# this script that lives outside the winget inventory. The native install lands in
+# ~/.local/bin and updates itself in the background, which is upstream's
+# recommended path and the one setup-ubuntu.sh already takes. The winget package
+# does not auto-update, and the CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE opt-in
+# that made it try cannot replace a running claude.exe (Windows locks it) — which
+# is exactly when a new release lands, mid-session.
+#
+# Unlike everything else here this install is per-user, not machine-wide: it
+# follows the profile of whoever this elevated script runs as, the same as the
+# ~/.wezterm.lua and profile blocks written further down.
+function Ensure-ClaudeCode {
+  # Migrate machines set up before this switch. Two claude.exe on one PATH means
+  # the winner is whichever directory comes first, and only the native one can
+  # update itself — the same reason ensure_claude_code drops the superseded npm
+  # global on the Ubuntu side.
+  # Held in a variable rather than passed as a quoted literal: audit-windows.ps1
+  # scrapes quoted package ids out of this script as the set setup *installs*, and
+  # this is the one place that names a package in order to remove it instead.
+  $staleWingetId = "Anthropic.ClaudeCode"
+  $wingetList = winget list --id $staleWingetId --exact --accept-source-agreements 2>$null | Out-String
+  if ($wingetList -match [regex]::Escape($staleWingetId)) {
+    Write-Host "→ Removing the winget Claude Code (superseded by the native install)" -ForegroundColor Cyan
+    winget uninstall --id $staleWingetId --exact --silent --disable-interactivity 2>&1 | Out-Null
   }
-  if ($null -eq $settings) { $settings = [PSCustomObject]@{} }
 
-  # Filter the property list rather than reading .PSObject.Properties.Name: strict
-  # mode turns member enumeration over an empty property set into a terminating
-  # error, which is exactly the fresh-`{}`-settings case.
-  if (-not ($settings.PSObject.Properties | Where-Object { $_.Name -eq "env" })) {
-    $settings | Add-Member -NotePropertyName "env" -NotePropertyValue ([PSCustomObject]@{}) -Force
-  }
-  $envBlock = $settings.env
-  $current  = $envBlock.PSObject.Properties | Where-Object { $_.Name -eq "CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE" }
-  if ($current -and "$($current.Value)" -eq "1") {
-    Write-Host "✓ Claude Code already set to upgrade its own winget package." -ForegroundColor Green
+  # Refresh PATH before the check: the winget uninstall above may have just
+  # removed the claude.exe this session still has cached on its PATH.
+  $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+              [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+  if (Test-Command "claude") {
+    $ver = (claude --version 2>$null | Select-Object -First 1)
+    Write-Host "✓ Claude Code already installed ($ver) — it self-updates" -ForegroundColor Green
     return
   }
 
-  $envBlock | Add-Member -NotePropertyName "CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE" -NotePropertyValue "1" -Force
-  Write-Host "→ Enabling Claude Code winget auto-upgrade: $settingsPath" -ForegroundColor Cyan
-  # Not Set-Content -Encoding UTF8 like the rest of this script: under Windows
-  # PowerShell 5.1 that writes a BOM, and a BOM ahead of `{` breaks strict JSON
-  # parsers. WriteAllText with a no-BOM encoding behaves the same on PS 5.1 and 7.
-  [System.IO.File]::WriteAllText(
-    $settingsPath,
-    ($settings | ConvertTo-Json -Depth 20),
-    (New-Object System.Text.UTF8Encoding($false))
-  )
-  # The upgrade can still fail while claude.exe is running (Windows locks the exe);
-  # Claude Code then falls back to showing the manual command.
-  Write-Host "✓ Claude Code will upgrade its winget package in the background." -ForegroundColor Green
+  Write-Host "→ Installing Claude Code (native installer)" -ForegroundColor Cyan
+  # Run the installer in a child process rather than `irm … | iex`: this script
+  # sets Set-StrictMode -Version Latest and $ErrorActionPreference = "Stop" for
+  # the whole session, and an upstream script written without those assumptions
+  # aborts on the first error it would otherwise shrug off.
+  $installer = Join-Path $env:TEMP "claude-install.ps1"
+  Invoke-WebRequest -Uri "https://claude.ai/install.ps1" -OutFile $installer -UseBasicParsing
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer
+  Remove-Item $installer -ErrorAction SilentlyContinue
+
+  # The installer appends ~/.local/bin to the *user* PATH; pick that up so the
+  # rest of this run (and the audit hint below) sees `claude`.
+  $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+              [System.Environment]::GetEnvironmentVariable("Path", "User")
+  if (Test-Command "claude") {
+    Write-Host "✓ Claude Code installed — run 'claude' to sign in" -ForegroundColor Green
+  } else {
+    Write-Warning "Claude Code installed, but 'claude' is not on PATH in this session. Open a new terminal and run: claude"
+  }
 }
 
 function Ensure-NodeAndNcu {
@@ -1001,6 +1067,10 @@ function Ensure-GitSetting {
 
 function Ensure-WindowsGitConfig {
   param($GitConfig)
+  # winget has just put git (and delta) on the machine PATH, but this session's
+  # copy predates that — refresh before probing for either.
+  $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+              [System.Environment]::GetEnvironmentVariable("Path", "User")
   if (-not (Test-Command "git")) {
     Write-Warning "git not in PATH yet — open a new terminal after installation and rerun to apply git config."
     return
@@ -1009,6 +1079,18 @@ function Ensure-WindowsGitConfig {
   Ensure-GitSetting "init.defaultBranch"   $GitConfig.DefaultBranch
   Ensure-GitSetting "pull.rebase"          $GitConfig.PullRebase
   Ensure-GitSetting "push.autoSetupRemote" $GitConfig.AutoSetupRemote
+  # Same three keys ensure_delta sets on the Ubuntu side, so `git diff` reads the
+  # same in either shell. Skipped unless delta is actually on PATH — setting
+  # core.pager to a missing binary breaks every paged git command.
+  if ($GitConfig.UseDelta) {
+    if (Test-Command "delta") {
+      Ensure-GitSetting "core.pager"            "delta"
+      Ensure-GitSetting "interactive.diffFilter" "delta --color-only"
+      Ensure-GitSetting "delta.navigate"         "true"
+    } else {
+      Write-Warning "delta not in PATH yet — rerun after installation to wire it into git."
+    }
+  }
 }
 
 # Set a per-user (persistent) environment variable, idempotently, and mirror it
@@ -1156,7 +1238,6 @@ if ($Config.ConfigurePwshExtras)  { $totalSteps++ }
 if ($Config.ShowCwdInTabTitle)    { $totalSteps++ }
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) { $totalSteps++ }
 if ($Config.RancherDesktopConfig.Configure) { $totalSteps++ }
-if ($Config.InstallClaudeCode -and $Config.ClaudeCodeAutoUpdate) { $totalSteps++ }
 $script:totalSteps = $totalSteps
 
 Show-Progress "Detecting system resources"
@@ -1177,16 +1258,19 @@ if ($Config.InstallWezTerm)         { Install-WingetPackage -Id "wez.wezterm" }
 if ($Config.InstallPowerShell7)     { Install-WingetPackage -Id "Microsoft.PowerShell" }
 if ($Config.InstallVSCode)          { Install-WingetPackage -Id "Microsoft.VisualStudioCode" }
 if ($Config.InstallRancherDesktop)  { Install-WingetPackage -Id "SUSE.RancherDesktop" }
+if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.PowerToys" }
+if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
+foreach ($tool in $Config.CliTools) { Install-WingetPackage -Id $tool }
+# After the CLI tools: Ensure-WindowsGitConfig wires delta into git, so delta has
+# to be installed by the time it runs.
 if ($Config.InstallGit) {
   Install-WingetPackage -Id "Git.Git"
   if ($Config.GitConfig.Configure) { Ensure-WindowsGitConfig -GitConfig $Config.GitConfig }
 }
-if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.PowerToys" }
-if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
 if ($Config.InstallNode)            { Ensure-NodeAndNcu }
 if ($Config.InstallAzureFunctionsCoreTools) { Install-WingetPackage -Id "Microsoft.Azure.FunctionsCoreTools" }
 if ($Config.InstallAspire)           { Install-WingetPackage -Id "Microsoft.Aspire" }
-if ($Config.InstallClaudeCode)      { Install-WingetPackage -Id "Anthropic.ClaudeCode" }
+if ($Config.InstallClaudeCode)      { Ensure-ClaudeCode }
 if ($Config.InstallCodex)           { Install-WingetPackage -Id "OpenAI.Codex" }
 
 if ($Config.Fonts.Count -gt 0) {
@@ -1225,7 +1309,8 @@ if ($Config.WezTermConfig.Configure) {
   Show-Progress "Configuring WezTerm"
   Ensure-WezTermConfig -WtConfig $Config.WezTermConfig `
     -WslDistro $Config.UbuntuDistroName `
-    -MakeWslDefault $Config.SetWslAsDefaultInWezTerm
+    -MakeWslDefault $Config.SetWslAsDefaultInWezTerm `
+    -UsePwsh $Config.InstallPowerShell7
 }
 
 if ($Config.Starship.Configure) {
@@ -1251,11 +1336,6 @@ if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {
 if ($Config.RancherDesktopConfig.Configure) {
   Show-Progress "Configuring Rancher Desktop"
   Ensure-RancherDesktopConfig -RdConfig $Config.RancherDesktopConfig
-}
-
-if ($Config.InstallClaudeCode -and $Config.ClaudeCodeAutoUpdate) {
-  Show-Progress "Configuring Claude Code auto-update"
-  Ensure-ClaudeCodeAutoUpdate
 }
 
 Show-Progress "Applying system settings"

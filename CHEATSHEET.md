@@ -17,9 +17,8 @@ The `+` button dropdown in the tab bar lists these, and the keys spawn them dire
 
 | Key | Opens |
 |---|---|
-| `Ctrl+Shift+1` | **cmd** |
-| `Ctrl+Shift+2` | **pwsh** (starts in `D:\code`) |
-| `Ctrl+Shift+3` | **Ubuntu** (WSL) |
+| `Ctrl+Shift+1` | **pwsh** (starts in `D:\code`) |
+| `Ctrl+Shift+2` | **Ubuntu** (WSL) |
 | `Ctrl+Shift+L` | **Launcher menu** (pick any of the above) |
 
 New tabs/windows open **Ubuntu** by default (that's the default domain).
@@ -64,13 +63,18 @@ Tmux-style split panes:
 
 | Key | Action |
 |---|---|
-| `Ctrl+Shift+D` | Split **right** (side by side) |
-| `Ctrl+Shift+E` | Split **down** (stacked) |
+| `Ctrl+Shift+Alt+←/→/↑/↓` | Split in that direction |
+| `Ctrl+Shift+D` | Split **right** (alias for `Ctrl+Shift+Alt+→`) |
+| `Ctrl+Shift+E` | Split **down** (alias for `Ctrl+Shift+Alt+↓`) |
 | `Ctrl+Shift+←/→/↑/↓` | Move focus between panes |
 | `Ctrl+Shift+Z` | Zoom the active pane (toggle full-tab) |
 
-A split inherits the current pane's shell (e.g. splitting an Ubuntu pane gives another
-Ubuntu pane). Close a pane by exiting its shell (`exit` / `Ctrl+D`).
+A split inherits the current pane's shell **and its directory** — splitting an Ubuntu
+pane gives another Ubuntu pane in the same folder, and a pwsh pane gives pwsh (not
+cmd: `default_prog` sets that). So there is no need for `wezterm cli split-pane
+--cwd "$PWD"`; the keybinding does the same thing from either side of the WSL
+boundary. The cwd travels as OSC 7, emitted by the managed prompt blocks on both
+platforms. Close a pane by exiting its shell (`exit` / `Ctrl+D`).
 
 ### Reloading config
 

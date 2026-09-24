@@ -14,6 +14,16 @@ UPDATE_STERN="${UPDATE_STERN:-true}"
 UPDATE_ASPIRE="${UPDATE_ASPIRE:-true}"               # aspire CLI (re-runs the aspire.dev installer)
 UPDATE_K9S="${UPDATE_K9S:-true}"
 UPDATE_KUBECTX="${UPDATE_KUBECTX:-true}"
+UPDATE_KUBELOGIN="${UPDATE_KUBELOGIN:-true}"
+UPDATE_AZD="${UPDATE_AZD:-true}"                     # azd CLI (re-runs the Microsoft installer)
+UPDATE_DOTNET_TOOLS="${UPDATE_DOTNET_TOOLS:-true}"   # dotnet tool update -g, per installed global tool
+
+# Major-version moves for the node / kubectl pins in setup-ubuntu.sh. OFF by
+# default and never part of a routine refresh: these rewrite an apt source and
+# replace the installed major version, so each one asks first. (The dotnet pin is
+# not here — SDKs coexist, so ensure_dotnet handles that on a plain setup rerun.)
+UPDATE_PINS="${UPDATE_PINS:-false}"                  # --pins
+PINS_ASSUME_YES="${PINS_ASSUME_YES:-false}"          # --pins-yes: take every prompt as yes
 UPDATE_OMZ="${UPDATE_OMZ:-true}"                   # oh-my-zsh self-update (git pull of ~/.oh-my-zsh)
 UPDATE_NPM_GLOBALS="${UPDATE_NPM_GLOBALS:-true}"   # npm update -g if npm is available
 UPDATE_PIPX="${UPDATE_PIPX:-true}"                 # pipx upgrade-all (updates uv and other pipx tools)
@@ -21,6 +31,8 @@ UPDATE_PIPX="${UPDATE_PIPX:-true}"                 # pipx upgrade-all (updates u
 # =========================
 # IMPLEMENTATION
 # =========================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'EOF'
@@ -35,6 +47,12 @@ Usage: update-ubuntu.sh [options]
   --skip-aspire        Skip Aspire CLI update
   --skip-k9s           Skip k9s update
   --skip-kubectx       Skip kubectx/kubens update
+  --skip-kubelogin     Skip kubelogin update
+  --skip-azd           Skip Azure Developer CLI update
+  --skip-dotnet-tools  Skip .NET global tool updates
+  --pins               Offer to move node/kubectl to the versions pinned in
+                       setup-ubuntu.sh (asks before each; off by default)
+  --pins-yes           As --pins, but answer yes to every prompt
   --skip-omz           Skip oh-my-zsh update
   --skip-npm-globals   Skip global npm package update
   --skip-pipx          Skip pipx upgrade-all
@@ -53,6 +71,11 @@ while [[ $# -gt 0 ]]; do
     --skip-aspire)       UPDATE_ASPIRE=false ;;
     --skip-k9s)          UPDATE_K9S=false ;;
     --skip-kubectx)      UPDATE_KUBECTX=false ;;
+    --skip-kubelogin)    UPDATE_KUBELOGIN=false ;;
+    --skip-azd)          UPDATE_AZD=false ;;
+    --skip-dotnet-tools) UPDATE_DOTNET_TOOLS=false ;;
+    --pins)              UPDATE_PINS=true ;;
+    --pins-yes)          UPDATE_PINS=true; PINS_ASSUME_YES=true ;;
     --skip-omz)          UPDATE_OMZ=false ;;
     --skip-npm-globals)  UPDATE_NPM_GLOBALS=false ;;
     --skip-pipx)         UPDATE_PIPX=false ;;
@@ -267,6 +290,148 @@ update_kubectx() {
   fi
 }
 
+update_kubelogin() {
+  if ! ensure_command kubelogin; then
+    echo "✓ kubelogin not installed, skipping"
+    return
+  fi
+  local current latest dpkg_arch tmp
+  current=$(kubelogin --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  latest=$(get_github_latest_tag "Azure/kubelogin")
+  if [[ "$current" == "$latest" ]]; then
+    echo "✓ kubelogin already at latest ($current)"
+    return
+  fi
+  echo "→ Updating kubelogin: $current → $latest"
+  dpkg_arch=$(dpkg --print-architecture)
+  tmp=$(mktemp -d)
+  curl -fsSL "https://github.com/Azure/kubelogin/releases/download/${latest}/kubelogin-linux-${dpkg_arch}.zip" \
+    -o "$tmp/kubelogin.zip"
+  # Same nesting as ensure_kubelogin in setup-ubuntu.sh: bin/linux_<arch>/kubelogin.
+  unzip -qo -j "$tmp/kubelogin.zip" "bin/linux_${dpkg_arch}/kubelogin" -d "$tmp"
+  sudo install -m 0755 "$tmp/kubelogin" /usr/local/bin/kubelogin
+  rm -rf "$tmp"
+  echo "✓ kubelogin updated to $latest"
+}
+
+update_azd() {
+  if ! ensure_command azd; then
+    echo "✓ azd not installed, skipping"
+    return
+  fi
+  local current latest num
+  current=$(azd version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  # azd tags its releases azure-dev-cli_<version>, not v<version>.
+  latest=$(get_github_latest_tag "Azure/azure-dev")
+  num="${latest##*_}"
+  if [[ "$current" == "$num" ]]; then
+    echo "✓ azd already at latest ($current)"
+    return
+  fi
+  echo "→ Updating azd: $current → $num"
+  # Same call as ensure_azd in setup-ubuntu.sh — no sudo; the installer elevates
+  # only the steps that need it.
+  curl -fsSL https://aka.ms/install-azd.sh | bash
+  echo "✓ azd updated to $(azd version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+}
+
+update_dotnet_tools() {
+  if ! command -v dotnet >/dev/null 2>&1; then
+    echo "✓ dotnet not installed, skipping"
+    return
+  fi
+  # No `dotnet tool update --all` in the SDK, so walk the installed set. Same
+  # header offset as audit-ubuntu.sh: two rows before the data.
+  local tools
+  mapfile -t tools < <(dotnet tool list -g 2>/dev/null | tail -n +3 | awk '{print $1}')
+  if [[ ${#tools[@]} -eq 0 ]]; then
+    echo "✓ no .NET global tools installed, skipping"
+    return
+  fi
+  local t
+  for t in "${tools[@]}"; do
+    [[ -z "$t" ]] && continue
+    echo "→ Updating $t"
+    # A tool already current exits non-zero on some SDKs; don't fail the step.
+    dotnet tool update -g "$t" || echo "⚠ could not update $t"
+  done
+  echo "✓ .NET global tools up to date (${#tools[@]} checked)"
+}
+
+# --- version pins -------------------------------------------------------------
+
+# Ask before one pin move. Defaults to NO: this replaces a major version on a
+# working machine, which is a decision, not a refresh. Never blocks without a
+# terminal — a scripted run without --pins-yes skips rather than hangs.
+confirm_pin() {
+  local reply
+  [[ "$PINS_ASSUME_YES" == "true" ]] && return 0
+  if [[ ! -t 0 ]]; then
+    echo "  ⚠ no terminal to prompt on and --pins-yes not given — skipping"
+    return 1
+  fi
+  read -r -p "  Proceed? [y/N] " reply || return 1
+  [[ "$reply" == "y" || "$reply" == "Y" ]]
+}
+
+update_pins() {
+  local setup="$SCRIPT_DIR/setup-ubuntu.sh"
+  if [[ ! -f "$setup" ]]; then
+    echo "⚠ setup-ubuntu.sh not found beside this script — cannot read the pins"
+    return 0
+  fi
+  # Parsed, not duplicated: the pin lives in setup-ubuntu.sh alone.
+  setup_pin() { grep -m1 "^${1}=" "$setup" | sed -e 's/^[^:]*:-//' -e 's/}.*//'; }
+
+  local want have
+  # --- kubectl ---
+  want=$(setup_pin KUBECTL_VERSION || true)
+  have=$(kubectl version --client 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+' | head -1 || true)
+  if [[ -n "$want" && -n "$have" && "$have" != "$want" ]]; then
+    echo "→ kubectl ${have} installed, pin is ${want}"
+    echo "  This rewrites /etc/apt/sources.list.d/kubernetes.list and its keyring,"
+    echo "  then upgrades the kubectl package. kubectl must stay within one minor"
+    echo "  of your clusters, so check them before moving more than one release."
+    if confirm_pin; then
+      sudo rm -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      sudo mkdir -p /etc/apt/keyrings
+      curl -fsSL "https://pkgs.k8s.io/core:/stable:/${want}/deb/Release.key" \
+        | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${want}/deb/ /" \
+        | sudo tee /etc/apt/sources.list.d/kubernetes.list > /dev/null
+      sudo apt-get update -y
+      sudo apt-get install -y --only-upgrade kubectl
+      echo "✓ kubectl now $(kubectl version --client 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    else
+      echo "  skipped"
+    fi
+  elif [[ -n "$have" ]]; then
+    echo "✓ kubectl already at the pinned ${want}"
+  fi
+
+  # --- node ---
+  want=$(setup_pin NODE_MAJOR_VERSION || true)
+  have=$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || true)
+  if [[ -n "$want" && -n "$have" && "$have" != "$want" ]]; then
+    echo "→ node ${have}.x installed, pin is ${want}.x"
+    echo "  This rewrites /etc/apt/sources.list.d/nodesource.list and replaces the"
+    echo "  nodejs package. Globals in /usr/lib/node_modules survive, but anything"
+    echo "  with a native addon needs reinstalling against the new ABI."
+    if confirm_pin; then
+      echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${want}.x nodistro main" \
+        | sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
+      sudo apt-get update -y
+      sudo apt-get install -y nodejs
+      echo "✓ node now $(node --version 2>/dev/null)"
+      echo "  Reinstall global CLIs if any misbehave: bash setup-ubuntu.sh"
+    else
+      echo "  skipped"
+    fi
+  elif [[ -n "$have" ]]; then
+    echo "✓ node already at the pinned ${want}.x"
+  fi
+}
+
 update_omz() {
   local omz="$HOME/.oh-my-zsh"
   if [[ ! -d "$omz/.git" ]]; then
@@ -347,6 +512,10 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_ASPIRE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_K9S"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_KUBECTX"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_KUBELOGIN"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_AZD"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_DOTNET_TOOLS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_PINS"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_OMZ"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_NPM_GLOBALS"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_PIPX"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -360,6 +529,10 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_ASPIRE"      == "true" ]] && run_step "Updating Aspire CLI"        --skip-aspire       update_aspire
 [[ "$UPDATE_K9S"         == "true" ]] && run_step "Updating k9s"               --skip-k9s          update_k9s
 [[ "$UPDATE_KUBECTX"     == "true" ]] && run_step "Updating kubectx/kubens"    --skip-kubectx      update_kubectx
+[[ "$UPDATE_KUBELOGIN"   == "true" ]] && run_step "Updating kubelogin"        --skip-kubelogin    update_kubelogin
+[[ "$UPDATE_AZD"         == "true" ]] && run_step "Updating azd"              --skip-azd          update_azd
+[[ "$UPDATE_DOTNET_TOOLS" == "true" ]] && run_step "Updating .NET global tools" --skip-dotnet-tools update_dotnet_tools
+[[ "$UPDATE_PINS"        == "true" ]] && run_step "Reconciling version pins"  "(omit --pins)"     update_pins
 [[ "$UPDATE_OMZ"         == "true" ]] && run_step "Updating oh-my-zsh"          --skip-omz          update_omz
 [[ "$UPDATE_NPM_GLOBALS" == "true" ]] && run_step "Updating global npm packages" --skip-npm-globals update_npm_globals
 [[ "$UPDATE_PIPX"        == "true" ]] && run_step "Upgrading pipx tools"          --skip-pipx         update_pipx

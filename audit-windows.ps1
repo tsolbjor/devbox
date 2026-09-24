@@ -11,16 +11,52 @@
 # "Expected" state is parsed straight out of the setup scripts (winget -Id calls,
 # the $Config arrays, git/profile/cache settings) so this audit can never drift
 # from setup itself.
+#
+# -Triage is the one mode that writes: it walks the "Extra" findings in an
+# interactive picker and folds what you tick into $Config.Ignore below, in this
+# file. Nothing else on the machine is touched, and the change lands in git where
+# you can read it before committing.
+
+param(
+  # Interactively choose which "Extra" findings to silence from now on.
+  [switch]$Triage
+)
 
 $Config = @{
   SetupScript  = Join-Path $PSScriptRoot "setup-windows.ps1"
   UpdateScript = Join-Path $PSScriptRoot "update-windows.ps1"
 
   CheckApps        = $true   # winget-managed apps: installed-not-in-setup + missing
+  CheckNativeApps  = $true   # apps installed outside winget by their own installer
   CheckVSCodeExts  = $true   # code --list-extensions vs $Config.VSCodeExtensions
   CheckNpmGlobals  = $true   # npm -g globals vs the ones setup installs
   CheckConfigFiles = $true   # WezTerm, PowerShell profiles, .wslconfig, cache env vars, git
   CheckStartup     = $true   # devbox-managed startup (Dev Drive task, ssh-agent) + autostart inventory
+
+  # Things installed on purpose that are not part of the dev environment: personal
+  # software, Office, browsers, runtime redistributables. Listing them here stops
+  # them being reported as "Extra" without pretending setup installs them — the
+  # third answer the remove/adopt hint has no room for.
+  #
+  # Populate interactively:  .\audit-windows.ps1 -Triage
+  Ignore = @{
+    Apps       = @()
+    Extensions = @()
+    NpmGlobals = @()
+    # Regex over winget ids, for families that would otherwise need a dozen
+    # literal entries each. These ship as dependencies of other packages and are
+    # never something you would "adopt into setup".
+    Patterns   = @(
+      '^Microsoft\.VCRedist\.',
+      '^Microsoft\.VCLibs',
+      '^Microsoft\.UI\.Xaml\.',
+      '^Microsoft\.WindowsAppRuntime',
+      '^Microsoft\.DotNet\.(Desktop|ASPNET)?Runtime',
+      '^Microsoft\.DotNet\.Native\.',
+      '^Microsoft\.AppInstaller$',
+      '^Microsoft\.WindowsApp$'
+    )
+  }
 }
 
 # =========================
@@ -30,16 +66,24 @@ $Config = @{
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$script:driftCount = 0
+$script:driftCount   = 0
+$script:ignoredCount = 0
+# The "Extra" findings of each kind, kept for -Triage to offer up afterwards.
+$script:extraApps = @()
+$script:extraExts = @()
+$script:extraNpm  = @()
+# -Triage does its own rendering, so the ordinary report is collected silently.
+$script:quiet = $Triage.IsPresent
 
-function Write-Section { param([string]$Title) Write-Host "`n=== $Title ===" -ForegroundColor White }
-function Report-Ok    { param([string]$Msg) Write-Host "✓ $Msg" -ForegroundColor Green }
-function Report-Warn  { param([string]$Msg) Write-Host "⚠ $Msg" -ForegroundColor Yellow }
+function Write-Section { param([string]$Title) if (-not $script:quiet) { Write-Host "`n=== $Title ===" -ForegroundColor White } }
+function Report-Ok    { param([string]$Msg) if (-not $script:quiet) { Write-Host "✓ $Msg" -ForegroundColor Green } }
+function Report-Warn  { param([string]$Msg) if (-not $script:quiet) { Write-Host "⚠ $Msg" -ForegroundColor Yellow } }
 # Inventory line — visibility only, never counted as drift.
-function Report-Info  { param([string]$Msg) Write-Host "· $Msg" -ForegroundColor DarkGray }
+function Report-Info  { param([string]$Msg) if (-not $script:quiet) { Write-Host "· $Msg" -ForegroundColor DarkGray } }
 function Report-Drift {
   param([string]$Msg, [string[]]$Fix)
   $script:driftCount++
+  if ($script:quiet) { return }
   Write-Host "⚠ $Msg" -ForegroundColor Yellow
   foreach ($f in $Fix) { Write-Host "    $f" -ForegroundColor DarkGray }
 }
@@ -107,6 +151,127 @@ function Get-ExpectedNpmGlobals {
 
 function Test-Command($Name) { return [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
 
+# --- ignore list ---------------------------------------------------------------
+
+# Is this name silenced, either by an exact entry or by one of the regex patterns?
+function Test-Ignored {
+  param(
+    [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Name,
+    [string[]]$Exact,
+    [string[]]$Patterns
+  )
+  foreach ($e in @($Exact)) { if ($e -and $e -eq $Name) { return $true } }
+  foreach ($p in @($Patterns)) { if ($p -and $Name -match $p) { return $true } }
+  return $false
+}
+
+# Console checkbox picker. Returns the ticked items, or an empty array if the
+# user escapes. Deliberately dependency-free: Out-GridView is absent on PS7
+# without extra modules, and this has to work in whichever host the audit is run.
+function Select-FromList {
+  param(
+    [Parameter(Mandatory=$true)][string]$Title,
+    [Parameter(Mandatory=$true)][string[]]$Items
+  )
+  if ($Items.Count -eq 0) { return @() }
+
+  $checked = New-Object 'System.Collections.Generic.HashSet[int]'
+  $cursor  = 0
+  # WindowHeight throws when output is redirected; fall back to something sane.
+  $height = 24
+  try { $height = [Console]::WindowHeight } catch { }
+  $page = [Math]::Max(5, $height - 8)
+
+  while ($true) {
+    $first = [Math]::Min([Math]::Max(0, $cursor - [int]($page / 2)), [Math]::Max(0, $Items.Count - $page))
+    $last  = [Math]::Min($Items.Count - 1, $first + $page - 1)
+
+    Clear-Host
+    Write-Host $Title -ForegroundColor White
+    Write-Host "  ↑/↓ move   Space toggle   A all   N none   Enter confirm   Esc skip" -ForegroundColor DarkGray
+    Write-Host ("  {0} of {1} ticked" -f $checked.Count, $Items.Count) -ForegroundColor DarkGray
+    Write-Host ""
+    for ($i = $first; $i -le $last; $i++) {
+      $mark = if ($checked.Contains($i)) { "[x]" } else { "[ ]" }
+      if ($i -eq $cursor) { Write-Host "> $mark $($Items[$i])" -ForegroundColor Cyan }
+      else                { Write-Host "  $mark $($Items[$i])" -ForegroundColor Gray }
+    }
+    if ($last -lt $Items.Count - 1) {
+      Write-Host ("  … {0} more" -f ($Items.Count - 1 - $last)) -ForegroundColor DarkGray
+    }
+
+    $key = [Console]::ReadKey($true)
+    switch ($key.Key) {
+      "UpArrow"   { if ($cursor -gt 0) { $cursor-- } }
+      "DownArrow" { if ($cursor -lt $Items.Count - 1) { $cursor++ } }
+      "PageUp"    { $cursor = [Math]::Max(0, $cursor - $page) }
+      "PageDown"  { $cursor = [Math]::Min($Items.Count - 1, $cursor + $page) }
+      "Home"      { $cursor = 0 }
+      "End"       { $cursor = $Items.Count - 1 }
+      "Spacebar"  {
+        if ($checked.Contains($cursor)) { [void]$checked.Remove($cursor) } else { [void]$checked.Add($cursor) }
+      }
+      "Enter"  { Clear-Host; return @(@($checked) | Sort-Object | ForEach-Object { $Items[$_] }) }
+      "Escape" { Clear-Host; return @() }
+      default  {
+        if     ("$($key.KeyChar)" -eq "a") { 0..($Items.Count - 1) | ForEach-Object { [void]$checked.Add($_) } }
+        elseif ("$($key.KeyChar)" -eq "n") { $checked.Clear() }
+      }
+    }
+  }
+}
+
+# Render the Ignore hashtable back as a PowerShell literal. Single-quoted
+# throughout: Patterns are regexes, and a `$anchor` inside a double-quoted string
+# would be swallowed as variable interpolation.
+function Format-IgnoreLiteral {
+  param([Parameter(Mandatory=$true)][hashtable]$Ignore)
+  $nl = "`r`n"
+  $sb = New-Object System.Text.StringBuilder
+  [void]$sb.Append("@{$nl")
+  foreach ($k in @("Apps", "Extensions", "NpmGlobals", "Patterns")) {
+    $vals = @(@($Ignore[$k]) | Where-Object { $_ } | Sort-Object -Unique)
+    if ($vals.Count -eq 0) {
+      [void]$sb.Append(("    {0,-10} = @(){1}" -f $k, $nl))
+      continue
+    }
+    [void]$sb.Append(("    {0,-10} = @({1}" -f $k, $nl))
+    for ($i = 0; $i -lt $vals.Count; $i++) {
+      $comma = if ($i -lt $vals.Count - 1) { "," } else { "" }
+      [void]$sb.Append(("      '{0}'{1}{2}" -f ($vals[$i] -replace "'", "''"), $comma, $nl))
+    }
+    [void]$sb.Append("    )$nl")
+  }
+  [void]$sb.Append("  }")
+  return $sb.ToString()
+}
+
+# Replace the Ignore block in this script, located by AST offset rather than by
+# regex so a value containing braces or quotes cannot derail the splice.
+function Save-IgnoreList {
+  param(
+    [Parameter(Mandatory=$true)][string]$Path,
+    [Parameter(Mandatory=$true)][hashtable]$Ignore
+  )
+  $raw = Get-Content $Path -Raw
+  $ast = [System.Management.Automation.Language.Parser]::ParseInput($raw, [ref]$null, [ref]$null)
+  $assign = $ast.Find({
+    param($n)
+    $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$Config'
+  }, $false)
+  if (-not $assign) { throw "Could not locate `$Config in $Path" }
+  $hash = $assign.Right.Find({ param($n) $n -is [System.Management.Automation.Language.HashtableAst] }, $false)
+  if (-not $hash) { throw "Could not locate the `$Config hashtable in $Path" }
+  $pair = $hash.KeyValuePairs | Where-Object { $_.Item1.Extent.Text -eq "Ignore" } | Select-Object -First 1
+  if (-not $pair) { throw "Could not locate the Ignore block in $Path" }
+
+  $ext = $pair.Item2.Extent
+  $updated = $raw.Substring(0, $ext.StartOffset) + (Format-IgnoreLiteral -Ignore $Ignore) + $raw.Substring($ext.EndOffset)
+  # No BOM: these scripts are stored without one, and Set-Content -Encoding UTF8
+  # under Windows PowerShell 5.1 would add one.
+  [System.IO.File]::WriteAllText($Path, $updated, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 # --- load expected state ---
 if (-not (Test-Path $Config.SetupScript)) { throw "setup script not found: $($Config.SetupScript)" }
 $setup   = Get-SetupConfig -Path $Config.SetupScript
@@ -122,7 +287,9 @@ if ($Config.CheckApps) {
     Report-Warn "winget not available — skipping app drift."
   } else {
     $expected = Get-LiteralWingetIds -Paths $scripts
-    foreach ($f in @($setup.Fonts) + @($setup.CloudCLIs)) { if ($f) { [void]$expected.Add($f) } }
+    # Installed through a variable (Install-WingetPackage -Id $x), so the literal
+    # scrape above cannot see them.
+    foreach ($f in @($setup.Fonts) + @($setup.CloudCLIs) + @($setup.CliTools)) { if ($f) { [void]$expected.Add($f) } }
 
     $tmp = Join-Path $env:TEMP "devbox-winget-export.json"
     winget export -o $tmp --accept-source-agreements --disable-interactivity 2>$null | Out-Null
@@ -134,8 +301,13 @@ if ($Config.CheckApps) {
     }
     $installedSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$installed, [System.StringComparer]::OrdinalIgnoreCase)
 
-    $missing = @($expected) | Where-Object { -not $installedSet.Contains($_) }
-    $extra   = @($installed | Sort-Object -Unique) | Where-Object { -not $expected.Contains($_) }
+    $missing  = @($expected) | Where-Object { -not $installedSet.Contains($_) }
+    $extraAll = @($installed | Sort-Object -Unique) | Where-Object { -not $expected.Contains($_) }
+    $extra    = @($extraAll | Where-Object {
+      -not (Test-Ignored -Name $_ -Exact $Config.Ignore.Apps -Patterns $Config.Ignore.Patterns)
+    })
+    $script:ignoredCount += ($extraAll.Count - $extra.Count)
+    $script:extraApps = $extra
 
     foreach ($id in $missing) {
       Report-Drift "Missing (setup installs it, not present): $id" @(
@@ -146,10 +318,42 @@ if ($Config.CheckApps) {
     foreach ($id in $extra) {
       Report-Drift "Extra (installed, not in setup): $id" @(
         "remove:  winget uninstall --id $id",
-        "adopt:   add `"$id`" to a `$Config array (Fonts/CloudCLIs) or an Install-WingetPackage -Id line in setup-windows.ps1"
+        "adopt:   add `"$id`" to a `$Config array (Fonts/CloudCLIs/CliTools) or an Install-WingetPackage -Id line in setup-windows.ps1",
+        "ignore:  .\audit-windows.ps1 -Triage   (not a dev tool — silence it)"
       )
     }
     if (-not $missing -and -not $extra) { Report-Ok "winget apps match setup ($($expected.Count) expected)." }
+  }
+}
+
+# ---------- Native (non-winget) installs ----------
+# Apps that come from their own installer because they self-update better than a
+# `winget upgrade` on a maintenance run can. They are invisible to the winget
+# inventory above, so they need their own presence check — the Windows
+# counterpart of the expected-command list audit-ubuntu.sh parses out of setup.
+if ($Config.CheckNativeApps) {
+  Write-Section "native installs"
+  if ($setup.InstallClaudeCode) {
+    $claudeCmd = Get-Command "claude" -ErrorAction SilentlyContinue
+    if (-not $claudeCmd) {
+      Report-Drift "Missing (setup installs it, not present): Claude Code" @(
+        "install: irm https://claude.ai/install.ps1 | iex",
+        "or rerun: .\setup-windows.ps1"
+      )
+    } else {
+      # A claude.exe outside ~/.local/bin is a winget or npm copy winning the PATH
+      # race. Only the native install updates itself, so the stale one has to go —
+      # a leftover winget package also shows up as "Extra" in the section above.
+      $claudeNative = Join-Path $env:USERPROFILE ".local\bin"
+      if ($claudeCmd.Source -notlike (Join-Path $claudeNative "*")) {
+        Report-Drift "Claude Code on PATH is not the native install: $($claudeCmd.Source)" @(
+          "fix:       .\setup-windows.ps1   (removes the winget copy, installs the native one)",
+          "find them: where.exe claude"
+        )
+      } else {
+        Report-Ok "Claude Code is the native install — it self-updates ($($claudeCmd.Source))."
+      }
+    }
   }
 }
 
@@ -164,15 +368,19 @@ if ($Config.CheckVSCodeExts) {
     $expSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$expected, [System.StringComparer]::OrdinalIgnoreCase)
     $insSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$installed, [System.StringComparer]::OrdinalIgnoreCase)
 
-    $missingExt = @($expected  | Where-Object { -not $insSet.Contains($_) })
-    $extraExt   = @($installed | Where-Object { -not $expSet.Contains($_) })
+    $missingExt  = @($expected  | Where-Object { -not $insSet.Contains($_) })
+    $extraExtAll = @($installed | Where-Object { -not $expSet.Contains($_) })
+    $extraExt    = @($extraExtAll | Where-Object { -not (Test-Ignored -Name $_ -Exact $Config.Ignore.Extensions) })
+    $script:ignoredCount += ($extraExtAll.Count - $extraExt.Count)
+    $script:extraExts = $extraExt
     foreach ($e in $missingExt) {
       Report-Drift "Missing extension: $e" @("install: code --install-extension $e")
     }
     foreach ($i in $extraExt) {
       Report-Drift "Extra extension (not in setup): $i" @(
         "remove: code --uninstall-extension $i",
-        "adopt:  add `"$i`" to `$Config.VSCodeExtensions in setup-windows.ps1"
+        "adopt:  add `"$i`" to `$Config.VSCodeExtensions in setup-windows.ps1",
+        "ignore: .\audit-windows.ps1 -Triage"
       )
     }
     if ($missingExt.Count -eq 0 -and $extraExt.Count -eq 0) {
@@ -197,17 +405,23 @@ if ($Config.CheckNpmGlobals) {
     } catch { Report-Warn "Could not parse 'npm ls -g'." }
 
     $insSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$globals, [System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($e in @($expected) | Where-Object { -not $insSet.Contains($_) }) {
+    $missingNpm  = @($expected | Where-Object { -not $insSet.Contains($_) })
+    $extraNpmAll = @($globals  | Where-Object { -not $expected.Contains($_) })
+    $extraNpm    = @($extraNpmAll | Where-Object { -not (Test-Ignored -Name $_ -Exact $Config.Ignore.NpmGlobals) })
+    $script:ignoredCount += ($extraNpmAll.Count - $extraNpm.Count)
+    $script:extraNpm = $extraNpm
+
+    foreach ($e in $missingNpm) {
       Report-Drift "Missing npm global: $e" @("install: npm install -g $e")
     }
-    foreach ($g in $globals | Where-Object { -not $expected.Contains($_) }) {
+    foreach ($g in $extraNpm) {
       Report-Drift "Extra npm global (not in setup): $g" @(
         "remove: npm uninstall -g $g",
-        "adopt:  add 'npm install -g $g' to Ensure-NodeAndNcu in setup-windows.ps1"
+        "adopt:  add 'npm install -g $g' to Ensure-NodeAndNcu in setup-windows.ps1",
+        "ignore: .\audit-windows.ps1 -Triage"
       )
     }
-    if (@($expected | Where-Object { -not $insSet.Contains($_) }).Count -eq 0 -and
-        @($globals  | Where-Object { -not $expected.Contains($_) }).Count -eq 0) {
+    if ($missingNpm.Count -eq 0 -and $extraNpm.Count -eq 0) {
       Report-Ok "npm globals match setup."
     }
   }
@@ -242,6 +456,14 @@ if ($Config.CheckConfigFiles) {
         if ($wt.TabTitleShowCwd) {
           $checks += @{ Name = "tab title cwd"; Want = "cwd"; Pattern = "format-tab-title" }
         }
+        # Not $Config-derived, so the loop above would never notice these going
+        # stale on a machine whose .wezterm.lua predates them. Markers only —
+        # enough to tell "regenerated since" from "written by an older setup".
+        if ($setup.InstallPowerShell7) {
+          $checks += @{ Name = "default_prog=pwsh"; Want = "pwsh"; Pattern = "config\.default_prog\s*=\s*\{\s*'pwsh\.exe'" }
+        }
+        $checks += @{ Name = "directional splits"; Want = "SplitPane"; Pattern = "SplitPane\s*\{\s*direction\s*=\s*'Left'" }
+
         $bad = @($checks | Where-Object { $lua -notmatch $_.Pattern })
         if ($bad) {
           Report-Drift "~/.wezterm.lua drifted from `$Config: $(( $bad | ForEach-Object { $_.Name }) -join ', ')" @(
@@ -321,33 +543,6 @@ if ($Config.CheckConfigFiles) {
     }
   }
 
-  # Claude Code's winget self-upgrade switch (~/.claude/settings.json is Claude
-  # Code's own file, so setup merges this one key in rather than owning the file).
-  if ($setup.InstallClaudeCode -and $setup.ClaudeCodeAutoUpdate) {
-    $ccPath = Join-Path $env:USERPROFILE ".claude\settings.json"
-    $ccVal = $null
-    if (Test-Path $ccPath) {
-      $ccJson = $null
-      try { $ccJson = Get-Content $ccPath -Raw | ConvertFrom-Json }
-      catch { Report-Warn "~/.claude/settings.json is not valid JSON — cannot check auto-update." }
-      # Strict mode makes a missing property a terminating error, so walk both
-      # levels explicitly instead of chaining .env.CLAUDE_CODE_...
-      # Filtered, not .PSObject.Properties.Name: strict mode makes member
-      # enumeration over an empty property set a terminating error.
-      if ($ccJson -and ($ccJson.PSObject.Properties | Where-Object { $_.Name -eq "env" })) {
-        $ccProp = $ccJson.env.PSObject.Properties |
-          Where-Object { $_.Name -eq "CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE" }
-        if ($ccProp) { $ccVal = $ccProp.Value }
-      }
-    }
-    if ("$ccVal" -ne "1") {
-      Report-Drift "Claude Code winget auto-upgrade is off (env CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE = '$ccVal')." @(
-        "fix: .\setup-windows.ps1",
-        "keep it off: set ClaudeCodeAutoUpdate = `$false in setup-windows.ps1"
-      )
-    } else { Report-Ok "Claude Code upgrades its own winget package." }
-  }
-
   # Git global config keys setup manages.
   if ($setup.GitConfig.Configure -and (Test-Command "git")) {
     $gitWant = @{
@@ -356,10 +551,17 @@ if ($Config.CheckConfigFiles) {
       "pull.rebase"          = $setup.GitConfig.PullRebase
       "push.autoSetupRemote" = $setup.GitConfig.AutoSetupRemote
     }
+    if ($setup.GitConfig.UseDelta) {
+      $gitWant["core.pager"]             = "delta"
+      $gitWant["interactive.diffFilter"] = "delta --color-only"
+      $gitWant["delta.navigate"]         = "true"
+    }
     foreach ($k in $gitWant.Keys) {
       $cur = (git config --global --get $k) 2>$null
       if ($cur -ne $gitWant[$k]) {
-        Report-Drift "git $k = '$cur' (expected '$($gitWant[$k])')." @("fix: git config --global $k $($gitWant[$k])")
+        # Quoted: values like "delta --color-only" contain spaces, and an unquoted
+        # hint would be pasted as two arguments and set the wrong thing.
+        Report-Drift "git $k = '$cur' (expected '$($gitWant[$k])')." @("fix: git config --global $k `"$($gitWant[$k])`"")
       }
     }
   }
@@ -455,10 +657,55 @@ if ($Config.CheckStartup) {
   } catch {}
 }
 
+# ---------- triage ----------
+# The one writing mode. Walks each category of "Extra" finding through a checkbox
+# picker and folds the ticked entries into $Config.Ignore in this file. Nothing
+# else is touched: the machine is left exactly as found, and the edit lands in
+# git where it can be read before committing.
+if ($Triage) {
+  $ignore = @{
+    Apps       = @($Config.Ignore.Apps)
+    Extensions = @($Config.Ignore.Extensions)
+    NpmGlobals = @($Config.Ignore.NpmGlobals)
+    Patterns   = @($Config.Ignore.Patterns)
+  }
+
+  $rounds = @(
+    @{ Key = "Apps";       Items = $script:extraApps; Label = "winget apps" },
+    @{ Key = "Extensions"; Items = $script:extraExts; Label = "VS Code extensions" },
+    @{ Key = "NpmGlobals"; Items = $script:extraNpm;  Label = "npm globals" }
+  )
+
+  $added = 0
+  foreach ($r in $rounds) {
+    $items = @($r.Items)
+    if ($items.Count -eq 0) { continue }
+    $title = "Extra $($r.Label) — tick the ones that are NOT drift (personal software, not dev tooling)"
+    $picked = @(Select-FromList -Title $title -Items $items)
+    if ($picked.Count -gt 0) {
+      $ignore[$r.Key] = @(@($ignore[$r.Key]) + $picked | Where-Object { $_ } | Sort-Object -Unique)
+      $added += $picked.Count
+    }
+  }
+
+  if ($added -eq 0) {
+    Write-Host "Nothing ticked — $(Split-Path $PSCommandPath -Leaf) left unchanged." -ForegroundColor Green
+    return
+  }
+
+  Save-IgnoreList -Path $PSCommandPath -Ignore $ignore
+  Write-Host "Added $added entr$(if ($added -eq 1) { 'y' } else { 'ies' }) to `$Config.Ignore in $(Split-Path $PSCommandPath -Leaf)." -ForegroundColor Green
+  Write-Host "Review with: git diff $(Split-Path $PSCommandPath -Leaf)" -ForegroundColor DarkGray
+  return
+}
+
 # ---------- summary ----------
 Write-Host ""
 if ($script:driftCount -eq 0) {
   Write-Host "No drift detected — machine matches setup." -ForegroundColor Green
 } else {
   Write-Host "$($script:driftCount) drift item(s) found. Each lists a fix and (for extras) how to adopt it into setup." -ForegroundColor Yellow
+}
+if ($script:ignoredCount -gt 0) {
+  Write-Host "$($script:ignoredCount) extra(s) silenced by `$Config.Ignore. Revisit with: .\audit-windows.ps1 -Triage" -ForegroundColor DarkGray
 }

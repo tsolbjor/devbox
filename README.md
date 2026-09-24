@@ -48,17 +48,19 @@ Installs and configures:
 | Category | What gets set up |
 |---|---|
 | Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip, Node.js (host), Azure Functions Core Tools, Aspire CLI |
+| CLI tools | ripgrep, bat, fd, jq, git-delta, lazygit, GitHub CLI — the same basics `setup-ubuntu.sh` installs, so pwsh matches the WSL shell |
+| Agentic CLIs | Claude Code (native install, self-updating), Codex (winget) |
 | Fonts | Cascadia Code, JetBrains Mono Nerd Font |
-| Cloud CLIs | Azure CLI (add AWS CLI / Google Cloud SDK via `CloudCLIs`) |
+| Cloud CLIs | Azure CLI, Azure Developer CLI (`azd`), kubelogin (Entra auth for AKS) — add AWS CLI / Google Cloud SDK via `CloudCLIs` |
 | VS Code | Remote WSL, Dev Containers, Docker extensions |
 | WSL | Ubuntu distro, resource limits (75% RAM/CPU), mirrored networking, swap disabled when allocated RAM ≥ 16 GB |
 | Rancher Desktop | moby engine (Docker-compatible), Kubernetes enabled |
-| WezTerm | JetBrains Mono Nerd Font, One Half Dark scheme, bar cursor, bell off; opens Ubuntu by default; Ctrl+Shift+1/2/3 switch cmd / pwsh (D:\code) / Ubuntu |
+| WezTerm | JetBrains Mono Nerd Font, One Half Dark scheme, bar cursor, bell off; opens Ubuntu by default; local panes run pwsh (not cmd); Ctrl+Shift+1/2 switch pwsh (D:\code) / Ubuntu; Ctrl+Shift+Alt+arrows split in any direction, inheriting the pane's shell and directory |
 | PowerShell prompt | Starship (nerd-font-symbols preset) for PS5 and PS7 |
 | PowerShell UX | fzf + PSFzf (Ctrl+T / Ctrl+R), PSReadLine predictive IntelliSense (ListView) |
 | Package caches | npm + NuGet caches relocated onto the `D:` Dev Drive (per-user env vars) |
 | System | Long path support, OpenSSH Agent, Defender exclusion for WSL vhdx |
-| Git | autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote |
+| Git | autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote, delta as the diff pager |
 
 ### 2. Ubuntu / WSL
 
@@ -86,8 +88,9 @@ Installs and configures:
 | Shell UX | 200 000-line history for bash and zsh (flushed per command), inline suggestions in a readable colour, PSReadLine-style accept keys (`→`, `Ctrl+→`, `Tab`), `Ctrl+R` history picker |
 | Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, wget, zip, git-delta, lazygit, GitHub CLI, Node.js |
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (npm global) |
-| Languages | .NET SDK, Aspire CLI, Python (venv/pip/pipx/uv) |
-| Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern |
+| Languages | .NET SDK (10 LTS), Aspire CLI, `dotnet outdated` (NuGet's `ncu`), Python (venv/pip/pipx/uv) |
+| Azure | Azure Developer CLI (`azd`) — provisions and deploys an Aspire AppHost |
+| Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern, kubelogin (Entra auth for AKS) |
 | Containers | verifies Rancher Desktop's docker is wired into WSL |
 | Git | user config (auto-detected from Windows), defaults, SSH commit signing |
 | SSH | ed25519 key pair |
@@ -129,7 +132,8 @@ flags / env vars on Ubuntu).
 
 Over time a machine accumulates apps and config the setup process doesn't know
 about. The `audit-*` scripts report that drift — **read-only, they change
-nothing** — and derive "expected" state by parsing the setup scripts themselves,
+nothing** (bar `audit-windows.ps1 -Triage`, which edits only its own ignore
+list) — and derive "expected" state by parsing the setup scripts themselves,
 so they can't fall out of sync with what setup actually does.
 
 ```powershell
@@ -141,14 +145,52 @@ so they can't fall out of sync with what setup actually does.
 
 ```bash
 # Ubuntu / WSL: expected CLIs, managed rc blocks, starship.toml, /etc/wsl.conf,
-# Git, default shell, plus extra snap/pipx/npm apps
+# Git, default shell, version pins, plus extra snap/pipx/npm/dotnet apps
 bash audit-ubuntu.sh              # add --apt-extras / --local-bin for noisier checks
 ```
+
+### Version pins
+
+`setup-ubuntu.sh` pins the .NET SDK, kubectl and Node major versions. Bumping one
+only affects a **fresh** machine — every `ensure_*` that uses a pin skips when the
+command is already there, so a rerun will not swap your Node major out from under
+you. The audit reports the gap; reconciling it is a separate, explicit step:
+
+```bash
+bash update-ubuntu.sh --pins      # asks before each; --pins-yes to accept all
+```
+
+.NET is the exception and needs no flag: SDKs install side by side, so a plain
+`bash setup-ubuntu.sh` adds the pinned SDK and leaves the old one in place.
 
 Each finding prints a two-way reconcile hint: how to **fix** the drift (rerun
 setup, install/uninstall) and, for unexpected apps, how to **adopt** it into
 setup (add to a `$Config` array / `APT_PACKAGES` / an `ensure_*` step) — so the
 report doubles as a worklist for updating the setup scripts.
+
+### Silencing what is neither
+
+Most machines carry software that is neither drift nor setup-worthy — 1Password,
+Office, a browser, the runtime redistributables other installers drag in. There
+is no honest `fix:` or `adopt:` for those, and left unanswered they bury the
+findings that matter. Both audits take an ignore list for exactly that third
+answer, and Windows can fill it interactively:
+
+```powershell
+.\audit-windows.ps1 -Triage
+```
+
+This walks each category of *Extra* finding through a checkbox picker (`↑`/`↓`,
+`Space` to tick, `A`/`N` for all/none, `Enter` to confirm, `Esc` to skip) and
+folds what you ticked into `$Config.Ignore` in `audit-windows.ps1` itself. It is
+the one mode that writes anything — and only to that file, so the change lands in
+git where you can read it before committing. Nothing on the machine is touched.
+
+`$Config.Ignore.Patterns` takes regexes for families that would otherwise need a
+dozen literal entries each; it ships pre-seeded with the VC++ / WindowsAppRuntime
+/ UI.Xaml runtimes. On Ubuntu the same lists are the `IGNORE_*` variables at the
+top of `audit-ubuntu.sh` (space-separated; `IGNORE_PATTERNS` holds regexes),
+edited by hand — there is no `--triage` there yet.
 
 ## System requirements
 

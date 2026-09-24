@@ -36,10 +36,13 @@ APT_PACKAGES=(
 # Optional installs
 INSTALL_GITHUB_CLI="${INSTALL_GITHUB_CLI:-true}"
 INSTALL_KUBECTL="${INSTALL_KUBECTL:-true}"
-KUBECTL_VERSION="${KUBECTL_VERSION:-v1.32}"   # Kubernetes minor version for apt repo
+KUBECTL_VERSION="${KUBECTL_VERSION:-v1.37}"   # Kubernetes minor version for apt repo. Keep within one
+                                              # minor of the clusters you talk to (kubectl skew policy);
+                                              # upstream supports only the newest three. https://kubernetes.io/releases/
 INSTALL_HELM="${INSTALL_HELM:-true}"
 INSTALL_K9S="${INSTALL_K9S:-true}"
 INSTALL_KUBECTX="${INSTALL_KUBECTX:-true}"
+INSTALL_KUBELOGIN="${INSTALL_KUBELOGIN:-true}"    # Entra ID credential plugin — required by kubectl against AKS
 INSTALL_STARSHIP="${INSTALL_STARSHIP:-true}"
 STARSHIP_PRESET="${STARSHIP_PRESET:-nerd-font-symbols}"   # `starship preset --list`; empty keeps the built-in default
 
@@ -75,7 +78,8 @@ SHELL_HISTORY_SIZE="${SHELL_HISTORY_SIZE:-200000}"          # HISTSIZE/SAVEHIST 
 ZSH_AUTOSUGGEST_COLOR="${ZSH_AUTOSUGGEST_COLOR:-fg=#7f849c}"
 
 INSTALL_NODE="${INSTALL_NODE:-true}"
-NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"   # LTS; https://nodejs.org/en/about/previous-releases
+NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-24}"   # Active LTS (22 reached EOL Sep 2026);
+                                                 # https://nodejs.org/en/about/previous-releases
 
 # Agentic CLIs.
 # Claude Code comes from its own installer (ensure_claude_code) and needs no Node.
@@ -90,8 +94,11 @@ SET_ZSH_DEFAULT="${SET_ZSH_DEFAULT:-true}"
 SET_GIT_DEFAULTS="${SET_GIT_DEFAULTS:-true}"
 ENSURE_SSH_KEY="${ENSURE_SSH_KEY:-true}"
 INSTALL_DOTNET="${INSTALL_DOTNET:-true}"
-DOTNET_SDK_VERSION="${DOTNET_SDK_VERSION:-8.0}"   # e.g. 8.0 (LTS) or 10.0; https://dotnet.microsoft.com/download
+DOTNET_SDK_VERSION="${DOTNET_SDK_VERSION:-10.0}"  # current LTS, supported to Nov 2028. 8.0 is the previous
+                                                  # LTS and leaves support Nov 2026; https://dotnet.microsoft.com/download
 INSTALL_ASPIRE="${INSTALL_ASPIRE:-true}"          # `aspire` CLI from aspire.dev (needs a .NET SDK to run an AppHost)
+INSTALL_AZD="${INSTALL_AZD:-true}"                # `azd` — Azure Developer CLI; provisions and deploys an Aspire AppHost
+INSTALL_DOTNET_TOOLS="${INSTALL_DOTNET_TOOLS:-true}"  # .NET global tools (dotnet-outdated — the NuGet counterpart to ncu)
 INSTALL_PYTHON="${INSTALL_PYTHON:-true}"          # python3 venv/pip + pipx + uv
 DOCKER_CHECK="${DOCKER_CHECK:-true}"              # verify Rancher Desktop's docker is wired into WSL
 GIT_SIGN_COMMITS="${GIT_SIGN_COMMITS:-true}"      # SSH-sign commits/tags with the generated key
@@ -362,6 +369,30 @@ ensure_kubectx() {
       | sudo tar -xz -C /usr/local/bin kubens
   fi
   echo "✓ kubectx/kubens ${version} installed"
+}
+
+# kubelogin — the Entra ID credential plugin kubectl shells out to. An AKS cluster
+# with Entra integration hands back a kubeconfig whose user block is `exec:
+# kubelogin`, so without this binary every kubectl call against such a cluster
+# fails on the exec step. kubectl alone is not enough, which is why this sits
+# beside ensure_kubectl rather than being optional.
+ensure_kubelogin() {
+  if ensure_command kubelogin; then
+    echo "✓ kubelogin already installed"
+    return
+  fi
+  echo "→ Installing kubelogin (latest)"
+  local version dpkg_arch tmp
+  version=$(gh_latest_tag Azure/kubelogin)   # e.g. v0.2.13
+  dpkg_arch=$(dpkg --print-architecture)     # amd64 / arm64 — matches kubelogin's asset naming
+  tmp=$(mktemp -d)
+  curl -fsSL "https://github.com/Azure/kubelogin/releases/download/${version}/kubelogin-linux-${dpkg_arch}.zip" \
+    -o "$tmp/kubelogin.zip"
+  # The archive nests the binary under bin/linux_<arch>/; -j flattens that away.
+  unzip -qo -j "$tmp/kubelogin.zip" "bin/linux_${dpkg_arch}/kubelogin" -d "$tmp"
+  sudo install -m 0755 "$tmp/kubelogin" /usr/local/bin/kubelogin
+  rm -rf "$tmp"
+  echo "✓ kubelogin ${version} installed"
 }
 
 ensure_node() {
@@ -912,10 +943,18 @@ TERMCWD
   done
 }
 
+# Keyed on the pinned SDK, not on "is dotnet present at all". .NET SDKs install
+# side by side, so bumping DOTNET_SDK_VERSION and rerunning adds the new one and
+# leaves the old in place — nothing is removed and no project stops building.
+# (node and kubectl cannot work this way: their pins replace the major version,
+# so those stay guarded and are handled by `update-ubuntu.sh --pins`.)
 ensure_dotnet() {
-  if ensure_command dotnet; then
-    echo "✓ dotnet already installed ($(dotnet --version 2>/dev/null))"
+  if ensure_command dotnet && dotnet --list-sdks 2>/dev/null | grep -q "^${DOTNET_SDK_VERSION}\."; then
+    echo "✓ dotnet SDK ${DOTNET_SDK_VERSION} already installed ($(dotnet --version 2>/dev/null))"
     return
+  fi
+  if ensure_command dotnet; then
+    echo "→ dotnet present but SDK ${DOTNET_SDK_VERSION} is missing; installing it alongside"
   fi
   local pkg="dotnet-sdk-${DOTNET_SDK_VERSION}"
   echo "→ Installing .NET SDK ${DOTNET_SDK_VERSION}"
@@ -970,6 +1009,69 @@ ensure_aspire() {
       ln -sf "$bin_dir/aspire" "$HOME/.local/bin/aspire"
     fi
   fi
+}
+
+# Azure Developer CLI (azd) — the provision-and-deploy half of the Aspire story:
+# `azd init` over an AppHost generates the Bicep and wires it to Container Apps.
+# From Microsoft's installer because there is no apt feed for it. Unlike
+# ensure_aspire this needs no ~/.local/bin shim: the installer drops the payload
+# in /opt/microsoft/azd and symlinks /usr/local/bin/azd, which is already on PATH.
+# Run without sudo — the script elevates only the steps that need it, and running
+# the whole thing as root would install against root's environment.
+ensure_azd() {
+  if ensure_command azd; then
+    echo "✓ azd already installed ($(azd version 2>/dev/null | head -1))"
+    return
+  fi
+  echo "→ Installing Azure Developer CLI (azd)"
+  curl -fsSL https://aka.ms/install-azd.sh | bash
+  echo "✓ azd installed ($(azd version 2>/dev/null | head -1))"
+}
+
+# Symlink a ~/.dotnet/tools binary into ~/.local/bin (idempotent).
+ensure_dotnet_tool_shim() {
+  local name="$1" src="$HOME/.dotnet/tools/$1"
+  [[ -x "$src" ]] || return 0
+  if [[ -L "$HOME/.local/bin/$name" ]]; then
+    echo "✓ $name shim already exists"
+    return
+  fi
+  echo "→ Creating $name shim at ~/.local/bin/$name"
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$src" "$HOME/.local/bin/$name"
+}
+
+# .NET global tools — the NuGet counterpart to the npm globals ensure_node installs:
+# `dotnet outdated` is to a .csproj what `ncu` is to a package.json.
+#
+# Keep the `dotnet tool install -g <package>` calls literal, not built from a
+# variable — audit-ubuntu.sh greps them out as the expected set, exactly as it does
+# the npm globals.
+#
+# Tools land in ~/.dotnet/tools, which nothing here puts on PATH. Rather than add
+# another rc-file PATH line, shim into ~/.local/bin, which ensure_starship already
+# guarantees is on PATH — the same trade ensure_aspire makes. Should this list grow
+# past a handful, one PATH entry becomes the better deal.
+ensure_dotnet_tools() {
+  if ! ensure_command dotnet; then
+    echo "⚠ dotnet not installed; skipping .NET global tools"
+    return
+  fi
+
+  # Checked three ways, like ensure_aspire: on PATH, then on disk but not yet on
+  # PATH. Skipping that second case would re-run the install, and `dotnet tool
+  # install` exits non-zero on an already-installed tool — fatal under `set -e`.
+  if ensure_command dotnet-outdated; then
+    echo "✓ dotnet-outdated already installed"
+  elif [[ -x "$HOME/.dotnet/tools/dotnet-outdated" ]]; then
+    echo "✓ dotnet-outdated already installed, not yet on PATH"
+  else
+    echo "→ Installing dotnet-outdated-tool"
+    dotnet tool install -g dotnet-outdated-tool
+    echo "✓ dotnet-outdated installed — run 'dotnet outdated' in a project"
+  fi
+
+  ensure_dotnet_tool_shim dotnet-outdated
 }
 
 ensure_python() {
@@ -1035,6 +1137,7 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
 [[ "$INSTALL_HELM"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_K9S"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_KUBECTX"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_KUBELOGIN"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_STARSHIP"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ZOXIDE"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_BAT"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -1049,6 +1152,8 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
 [[ "$INSTALL_CLAUDE_CODE" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_DOTNET"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ASPIRE"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_AZD"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_DOTNET_TOOLS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_PYTHON"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$DOCKER_CHECK"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$ENSURE_SSH_KEY"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -1164,6 +1269,11 @@ if [[ "$INSTALL_KUBECTX" == "true" ]]; then
   ensure_kubectx
 fi
 
+if [[ "$INSTALL_KUBELOGIN" == "true" ]]; then
+  log "Installing kubelogin"
+  ensure_kubelogin
+fi
+
 if [[ "$INSTALL_STARSHIP" == "true" ]]; then
   log "Installing starship"
   ensure_starship
@@ -1236,6 +1346,16 @@ fi
 if [[ "$INSTALL_ASPIRE" == "true" ]]; then
   log "Installing Aspire CLI"
   ensure_aspire
+fi
+
+if [[ "$INSTALL_AZD" == "true" ]]; then
+  log "Installing Azure Developer CLI"
+  ensure_azd
+fi
+
+if [[ "$INSTALL_DOTNET_TOOLS" == "true" ]]; then
+  log "Installing .NET global tools"
+  ensure_dotnet_tools
 fi
 
 if [[ "$INSTALL_PYTHON" == "true" ]]; then

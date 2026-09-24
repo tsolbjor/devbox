@@ -20,14 +20,26 @@ SETUP="${SETUP:-$SCRIPT_DIR/setup-ubuntu.sh}"
 
 CHECK_CLIS="${CHECK_CLIS:-true}"        # expected CLIs present?
 CHECK_CONFIG="${CHECK_CONFIG:-true}"    # rc blocks, starship.toml, wsl.conf, git, shell
-CHECK_EXTRAS="${CHECK_EXTRAS:-true}"    # snap / pipx / npm globals not in setup
+CHECK_EXTRAS="${CHECK_EXTRAS:-true}"    # snap / pipx / npm / dotnet globals not in setup
 CHECK_SERVICES="${CHECK_SERVICES:-true}" # systemd running-state + startup inventory (enabled units, crontab)
 CHECK_DOCKER="${CHECK_DOCKER:-true}"    # Rancher Desktop is the intended docker engine — flag shadow apt/snap engines
+CHECK_PINS="${CHECK_PINS:-true}"        # installed major versions vs the version pins in setup-ubuntu.sh
 APT_EXTRAS=false                        # --apt-extras: list manual apt pkgs not in setup (noisy: includes base)
 LOCAL_BIN=false                         # --local-bin: list /usr/local/bin binaries not in setup
 
 # ensure_command names that are interop/optional, not things setup installs on Linux
 CMD_DENYLIST="whoami powershell docker batcat fdfind ncu"
+
+# Extras installed on purpose that are not part of the dev environment. Listing one
+# here stops it being reported — the third answer the remove/adopt hint has no room
+# for. Space-separated exact names; IGNORE_PATTERNS entries are extended regexes
+# applied to every extras category. (The Windows side keeps the same idea in
+# $Config.Ignore, and fills it interactively with `audit-windows.ps1 -Triage`.)
+IGNORE_SNAP="${IGNORE_SNAP:-}"
+IGNORE_PIPX="${IGNORE_PIPX:-}"
+IGNORE_NPM="${IGNORE_NPM:-}"
+IGNORE_DOTNET="${IGNORE_DOTNET:-}"
+IGNORE_PATTERNS="${IGNORE_PATTERNS:-}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -77,6 +89,18 @@ mapfile -t EXPECTED_LOCALBIN < <(
 )
 
 in_list() { local needle="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }
+
+ignored=0
+# Silenced by one of the IGNORE_* lists (exact) or IGNORE_PATTERNS (ERE)? Both
+# lists are deliberately unquoted below — they are space-separated by contract.
+is_ignored() {
+  local name="$1" list="$2" x
+  for x in $list;            do [[ "$x" == "$name" ]] && return 0; done
+  for x in $IGNORE_PATTERNS; do grep -qE "$x" <<< "$name" && return 0; done
+  return 1
+}
+# Count and skip: `is_ignored ... && skip_ignored && continue` reads left to right.
+skip_ignored() { ignored=$((ignored + 1)); return 0; }
 
 # ---------- expected CLIs present ----------
 if [[ "$CHECK_CLIS" == "true" ]]; then
@@ -262,6 +286,7 @@ if [[ "$CHECK_EXTRAS" == "true" ]]; then
     while read -r sn _; do
       [[ -z "$sn" || "$sn" == "Name" ]] && continue
       echo "$sn" | grep -qE "$snap_base" && continue
+      is_ignored "$sn" "$IGNORE_SNAP" && skip_ignored && continue
       report_drift "Extra snap: $sn" "remove: sudo snap remove $sn" "adopt: add a 'snap install $sn' step to setup-ubuntu.sh"
     done < <(snap list 2>/dev/null)
   fi
@@ -271,6 +296,7 @@ if [[ "$CHECK_EXTRAS" == "true" ]]; then
     mapfile -t EXPECTED_PIPX < <(grep -oE 'pipx install [a-z0-9._-]+' "$SETUP" | awk '{print $3}' | sort -u)
     while read -r pkg; do
       [[ -z "$pkg" ]] && continue
+      is_ignored "$pkg" "$IGNORE_PIPX" && skip_ignored && continue
       in_list "$pkg" "${EXPECTED_PIPX[@]:-}" || \
         report_drift "Extra pipx tool: $pkg" "remove: pipx uninstall $pkg" "adopt: add 'pipx install $pkg' to setup-ubuntu.sh"
     done < <(pipx list --short 2>/dev/null | awk '{print $1}')
@@ -282,9 +308,22 @@ if [[ "$CHECK_EXTRAS" == "true" ]]; then
     while read -r pkg; do
       # npm and corepack ship bundled with Node — not "extra" installs
       [[ -z "$pkg" || "$pkg" == "npm" || "$pkg" == "corepack" ]] && continue
+      is_ignored "$pkg" "$IGNORE_NPM" && skip_ignored && continue
       in_list "$pkg" "${EXPECTED_NPM[@]:-}" || \
         report_drift "Extra npm global: $pkg" "remove: npm uninstall -g $pkg" "adopt: add 'npm install -g $pkg' to setup-ubuntu.sh"
     done < <(npm ls -g --depth=0 --parseable 2>/dev/null | sed '1d' | sed -E 's|.*/node_modules/||')
+  fi
+
+  # .NET global tools vs expected (dotnet tool install -g <name>). `dotnet tool
+  # list -g` prints a header row plus a dashed rule before the data, hence +3.
+  if command -v dotnet >/dev/null 2>&1; then
+    mapfile -t EXPECTED_DOTNET < <(grep -ohE 'dotnet tool install -g [a-zA-Z0-9._-]+' "$SETUP" update-ubuntu.sh 2>/dev/null | awk '{print $5}' | sort -u)
+    while read -r pkg; do
+      [[ -z "$pkg" ]] && continue
+      is_ignored "$pkg" "$IGNORE_DOTNET" && skip_ignored && continue
+      in_list "$pkg" "${EXPECTED_DOTNET[@]:-}" || \
+        report_drift "Extra .NET global tool: $pkg" "remove: dotnet tool uninstall -g $pkg" "adopt: add 'dotnet tool install -g $pkg' to ensure_dotnet_tools in setup-ubuntu.sh"
+    done < <(dotnet tool list -g 2>/dev/null | tail -n +3 | awk '{print $1}')
   fi
 fi
 
@@ -409,6 +448,65 @@ if [[ "$APT_EXTRAS" == "true" ]]; then
       done
 fi
 
+# ---------- version pins ----------
+# The three pins in setup-ubuntu.sh track upstream support windows, but every
+# ensure_* that uses them short-circuits on "command already present" — so bumping
+# a pin provisions a NEW machine correctly and silently does nothing to this one.
+# Nothing else would ever tell you, hence this section. Read-only, like the rest:
+# `update-ubuntu.sh --pins` is what actually performs the upgrade.
+if [[ "$CHECK_PINS" == "true" ]]; then
+  section "Version pins"
+
+  # Parsed from setup-ubuntu.sh so the pin lives in exactly one place.
+  setup_pin() { grep -m1 "^${1}=" "$SETUP" | sed -e 's/^[^:]*:-//' -e 's/}.*//'; }
+
+  pin_drift() {  # label, want, have, extra-hint
+    report_drift "$1: pinned $2, installed $3" \
+      "fix:  bash update-ubuntu.sh --pins" \
+      "keep: change the pin in setup-ubuntu.sh${4:+ ($4)}"
+  }
+
+  want_dotnet=$(setup_pin DOTNET_SDK_VERSION)
+  if [[ -n "$want_dotnet" ]] && command -v dotnet >/dev/null 2>&1; then
+    if dotnet --list-sdks 2>/dev/null | grep -q "^${want_dotnet}\."; then
+      report_ok "dotnet SDK ${want_dotnet}.x installed."
+    else
+      have=$(dotnet --list-sdks 2>/dev/null | awk '{print $1}' | paste -sd, - )
+      report_drift "dotnet SDK: pinned ${want_dotnet}.x, installed ${have:-none}" \
+        "fix:  bash setup-ubuntu.sh   (adds it alongside; SDKs coexist, nothing is removed)" \
+        "keep: change DOTNET_SDK_VERSION in setup-ubuntu.sh"
+    fi
+  fi
+
+  want_kubectl=$(setup_pin KUBECTL_VERSION)
+  if [[ -n "$want_kubectl" ]] && command -v kubectl >/dev/null 2>&1; then
+    have=$(kubectl version --client 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+' | head -1)
+    [[ "$have" == "$want_kubectl" ]] \
+      && report_ok "kubectl ${want_kubectl} installed." \
+      || pin_drift "kubectl" "$want_kubectl" "${have:-unknown}"
+    # The apt source pins the minor the repo serves; upgrading the binary without
+    # it just reinstalls the old one on the next apt upgrade.
+    repo=$(grep -oE 'stable:/v[0-9]+\.[0-9]+' /etc/apt/sources.list.d/kubernetes.list 2>/dev/null | head -1 | sed 's|stable:/||')
+    if [[ -n "$repo" && "$repo" != "$want_kubectl" ]]; then
+      report_drift "kubectl apt repo still serves $repo (pin is $want_kubectl)" \
+        "fix: bash update-ubuntu.sh --pins"
+    fi
+  fi
+
+  want_node=$(setup_pin NODE_MAJOR_VERSION)
+  if [[ -n "$want_node" ]] && command -v node >/dev/null 2>&1; then
+    have=$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')
+    [[ "$have" == "$want_node" ]] \
+      && report_ok "node ${want_node}.x installed." \
+      || pin_drift "node" "${want_node}.x" "${have:-unknown}.x"
+    repo=$(grep -oE 'node_[0-9]+\.x' /etc/apt/sources.list.d/nodesource.list 2>/dev/null | head -1)
+    if [[ -n "$repo" && "$repo" != "node_${want_node}.x" ]]; then
+      report_drift "node apt repo still serves $repo (pin is node_${want_node}.x)" \
+        "fix: bash update-ubuntu.sh --pins"
+    fi
+  fi
+fi
+
 # ---------- summary ----------
 echo
 if [[ $drift -eq 0 ]]; then
@@ -416,4 +514,7 @@ if [[ $drift -eq 0 ]]; then
 else
   echo "$drift drift item(s) found. Each lists a fix and (for extras) how to adopt it into setup."
   echo "Tip: rerun with --apt-extras / --local-bin for the noisier checks."
+fi
+if [[ $ignored -gt 0 ]]; then
+  echo "$ignored extra(s) silenced by the IGNORE_* lists at the top of this script."
 fi
