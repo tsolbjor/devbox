@@ -716,22 +716,44 @@ ensure_eza() {
     echo "✓ eza installed"
   fi
 
-  # Convenience aliases: ls/ll/lt -> eza (idempotent, marker-guarded)
+  # Convenience aliases: ls/ll/lt -> eza. `--icons=auto`, never a bare `--icons`:
+  # since eza 0.20 the flag takes an optional value, so `ls somedir` would hand
+  # "somedir" to --icons and fail with "invalid value ... for '--icons'".
+  local body
+  body="$(mktemp)"
+  cat > "$body" <<'ALIASES'
+alias ls='eza --icons=auto'
+alias ll='eza -la --icons=auto --git'
+alias lt='eza --tree --level=2 --icons=auto'
+ALIASES
   for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     [[ -f "$rc" ]] || continue
-    if grep -q 'devbox eza aliases' "$rc"; then
-      echo "✓ eza aliases already in $(basename "$rc")"
-    else
+    migrate_legacy_eza_block "$rc"
+    if ! set_managed_block "$rc" "eza aliases" "$body" "eza aliases"; then
       echo "→ Adding eza aliases to $(basename "$rc")"
-      cat >> "$rc" <<'ALIASES'
-
-# devbox eza aliases
-alias ls='eza --icons'
-alias ll='eza -la --icons --git'
-alias lt='eza --tree --level=2 --icons'
-ALIASES
+      wrap_managed_block "eza aliases" "$body" >> "$rc"
     fi
   done
+  rm -f "$body"
+}
+
+# Earlier runs wrote a bare '# devbox eza aliases' line followed by the aliases,
+# append-if-absent — so a changed alias never reached an existing machine. Wrap
+# that legacy block in the managed delimiters where it sits, so set_managed_block
+# can rewrite it in place from now on.
+migrate_legacy_eza_block() {
+  local rc="$1" tmp
+  grep -qxF '# devbox eza aliases' "$rc" || return 0
+  echo "→ Converting legacy eza aliases block in $(basename "$rc") to a managed block"
+  tmp="$(mktemp)"
+  awk -v endmark="$MANAGED_END" '
+    $0 == "# devbox eza aliases" { print "# --- devbox: eza aliases ---"; inblock = 1; next }
+    inblock && /^alias (ls|ll|lt)=/ { print; next }
+    inblock { print endmark; inblock = 0 }
+    { print }
+    END { if (inblock) print endmark }
+  ' "$rc" > "$tmp"
+  mv "$tmp" "$rc"
 }
 
 ensure_delta() {

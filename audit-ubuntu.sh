@@ -156,7 +156,7 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
     check_rc_marker  "$rc" 'starship init'      'starship init'
     check_rc_marker  "$rc" 'zoxide init'        'zoxide init'
     check_rc_marker  "$rc" 'devbox: fnm ---'    'fnm init'
-    check_rc_marker  "$rc" 'devbox eza aliases' 'eza aliases'
+    check_rc_marker  "$rc" 'devbox: eza aliases ---' 'eza aliases'
     check_rc_marker  "$rc" 'devbox terminal cwd' 'terminal cwd/title reporting'
     check_rc_present "$rc" 'fzf'                 'fzf integration'
   done

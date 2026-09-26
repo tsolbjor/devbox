@@ -77,7 +77,7 @@ Check current state, skip if already correct, act and report if not. Every `Ensu
 
 Managed blocks written into user config (PowerShell profiles, rc files) are delimited by `# --- devbox: <marker> ... # --- end devbox block ---` and rewritten **in place** by `Set-ManagedProfileBlock` (PowerShell) / `set_managed_block` (Bash), not merely appended when the marker is absent. Marker-presence-only checks strand every existing machine on the old block the moment the snippet changes. `audit-windows.ps1` cross-checks the installed block against the here-string it parses out of the setup function, so a stale block reports as drift.
 
-Older Ubuntu blocks (`devbox eza aliases`, `devbox terminal cwd`) predate this and still use bare markers with append-if-absent. New Bash blocks should use `set_managed_block`.
+The older Ubuntu block `devbox terminal cwd` predates this and still uses a bare marker with append-if-absent. `devbox eza aliases` used to as well; `migrate_legacy_eza_block` wraps it in the managed delimiters where it sits. New Bash blocks should use `set_managed_block`.
 
 **Load order is part of the contract for the zsh history blocks.** `devbox: zsh history` must sit *above* the oh-my-zsh source line (omz's `lib/history.zsh` reassigns `HISTSIZE`/`SAVEHIST`, and zsh-autosuggestions only honours `ZSH_AUTOSUGGEST_*` already set when it loads); `devbox: zsh history keys` must sit *below* the fzf integration (fzf binds `^I`). Hence `ensure_shell_history` runs after `ensure_omz`/`ensure_fzf_shell_integration`, splices with `insert_before_anchor` on first write, and rewrites in place afterwards so the position survives. `audit-ubuntu.sh` compares line numbers rather than trusting marker presence — a block in the wrong place fails silently otherwise.
 
