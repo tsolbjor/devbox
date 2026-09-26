@@ -292,21 +292,36 @@ ensure_kubectl() {
   echo "✓ kubectl installed"
 }
 
+# Helm's apt repo moved from baltocdn.com to Buildkite, with a new signing key.
+# The old host now serves an incomplete TLS chain, so a machine still carrying
+# its source fails *every* `apt-get update`, not just helm's — hence the source
+# is migrated even when helm is already installed.
 ensure_helm() {
-  if ensure_command helm; then
+  local list=/etc/apt/sources.list.d/helm-stable-debian.list key=/usr/share/keyrings/helm.gpg
+  local migrate=false
+  if [[ -f "$list" ]] && grep -q 'baltocdn' "$list"; then
+    echo "→ Moving the helm apt source off the retired baltocdn.com to Buildkite"
+    sudo rm -f "$list" "$key"
+    migrate=true
+  fi
+  if ensure_command helm && [[ "$migrate" == "false" ]]; then
     echo "✓ helm already installed"
     return
   fi
-  echo "→ Installing helm"
-  if [[ ! -f /usr/share/keyrings/helm.gpg ]]; then
-    curl -fsSL https://baltocdn.com/helm/signing.asc \
-      | gpg --dearmor | sudo tee /usr/share/keyrings/helm.gpg > /dev/null
+  if [[ ! -f "$key" ]]; then
+    curl -fsSL https://packages.buildkite.com/helm-linux/helm-debian/gpgkey \
+      | gpg --dearmor | sudo tee "$key" > /dev/null
   fi
-  if [[ ! -f /etc/apt/sources.list.d/helm-stable-debian.list ]]; then
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/helm.gpg] https://baltocdn.com/helm/stable/debian/ all main" \
-      | sudo tee /etc/apt/sources.list.d/helm-stable-debian.list > /dev/null
+  if [[ ! -f "$list" ]]; then
+    echo "deb [signed-by=$key] https://packages.buildkite.com/helm-linux/helm-debian/any/ any main" \
+      | sudo tee "$list" > /dev/null
     sudo apt-get update -y
   fi
+  if ensure_command helm; then
+    echo "✓ helm already installed; apt source migrated"
+    return
+  fi
+  echo "→ Installing helm"
   sudo apt-get install -y helm
   echo "✓ helm installed"
 }
