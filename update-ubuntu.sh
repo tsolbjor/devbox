@@ -132,9 +132,25 @@ fnm_default_version() {
   basename "$(dirname "$link")"
 }
 
+# Latest release tag of a GitHub repo, or a non-zero return with a reason (see
+# gh_latest_tag in setup-ubuntu.sh: authenticated when a token is to hand, since
+# the anonymous 60 calls/hour are shared by everyone behind a corporate NAT).
+# Callers must `|| return 1` — run_step invokes them as an `if` condition, which
+# suspends set -e, so an empty tag would otherwise sail on into a broken URL.
 get_github_latest_tag() {
-  curl -fsSL "https://api.github.com/repos/${1}/releases/latest" \
-    | grep '"tag_name"' | cut -d'"' -f4
+  local repo="$1" tag token="${GITHUB_TOKEN:-${GH_TOKEN:-}}" auth=()
+  if [[ -z "$token" ]] && ensure_command gh; then
+    token="$(gh auth token 2>/dev/null || true)"
+  fi
+  [[ -n "$token" ]] && auth=(-H "Authorization: Bearer $token")
+  tag="$(curl -fsSL "${auth[@]}" "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null \
+    | grep '"tag_name"' | cut -d'"' -f4)" || true
+  if [[ -z "$tag" ]]; then
+    echo "⚠ Could not resolve the latest ${repo} release — GitHub API rate limit or no network?" >&2
+    echo "  Authenticate and rerun: export GITHUB_TOKEN=... or run 'gh auth login'" >&2
+    return 1
+  fi
+  printf '%s\n' "$tag"
 }
 
 update_apt() {
@@ -191,7 +207,7 @@ update_delta() {
   fi
   local current latest arch
   current=$(delta --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
-  latest=$(get_github_latest_tag "dandavison/delta")   # no leading 'v'
+  latest=$(get_github_latest_tag "dandavison/delta") || return 1   # no leading 'v'
   if [[ "$current" == "$latest" ]]; then
     echo "✓ delta already at latest ($current)"
     return
@@ -210,7 +226,7 @@ update_lazygit() {
   fi
   local current latest num arch
   current=$(lazygit --version 2>/dev/null | grep -oE 'version=[0-9]+\.[0-9]+\.[0-9]+' | cut -d= -f2 | head -1 || echo "unknown")
-  latest=$(get_github_latest_tag "jesseduffield/lazygit")   # vX.Y.Z
+  latest=$(get_github_latest_tag "jesseduffield/lazygit") || return 1   # vX.Y.Z
   num="${latest#v}"
   if [[ "$current" == "$num" ]]; then
     echo "✓ lazygit already at latest ($current)"
@@ -230,7 +246,7 @@ update_stern() {
   fi
   local current latest num dpkg_arch
   current=$(stern --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
-  latest=$(get_github_latest_tag "stern/stern")   # vX.Y.Z
+  latest=$(get_github_latest_tag "stern/stern") || return 1   # vX.Y.Z
   num="${latest#v}"
   if [[ "$current" == "$num" ]]; then
     echo "✓ stern already at latest ($current)"
@@ -250,7 +266,7 @@ update_glow() {
   fi
   local current latest num arch dir
   current=$(glow --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
-  latest=$(get_github_latest_tag "charmbracelet/glow")   # vX.Y.Z
+  latest=$(get_github_latest_tag "charmbracelet/glow") || return 1   # vX.Y.Z
   num="${latest#v}"
   if [[ "$current" == "$num" ]]; then
     echo "✓ glow already at latest ($current)"
@@ -276,7 +292,7 @@ update_aspire() {
   fi
   local current latest num
   current=$(aspire --version 2>/dev/null | head -1 | cut -d+ -f1)
-  latest=$(get_github_latest_tag "microsoft/aspire")   # vX.Y.Z
+  latest=$(get_github_latest_tag "microsoft/aspire") || return 1   # vX.Y.Z
   num="${latest#v}"
   if [[ "$current" == "$num" ]]; then
     echo "✓ aspire already at latest ($current)"
@@ -295,7 +311,7 @@ update_k9s() {
   fi
   local current latest arch
   current=$(k9s version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
-  latest=$(get_github_latest_tag "derailed/k9s")
+  latest=$(get_github_latest_tag "derailed/k9s") || return 1
   if [[ "$current" == "$latest" ]]; then
     echo "✓ k9s already at latest ($current)"
     return
@@ -316,7 +332,7 @@ update_kubectx() {
     return
   fi
   local latest dpkg_arch arch
-  latest=$(get_github_latest_tag "ahmetb/kubectx")
+  latest=$(get_github_latest_tag "ahmetb/kubectx") || return 1
   dpkg_arch=$(dpkg --print-architecture)
   arch=$([ "$dpkg_arch" = "amd64" ] && echo "x86_64" || echo "$dpkg_arch")
   local base="https://github.com/ahmetb/kubectx/releases/download/${latest}"
@@ -341,7 +357,7 @@ update_kubelogin() {
   fi
   local current latest dpkg_arch tmp
   current=$(kubelogin --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
-  latest=$(get_github_latest_tag "Azure/kubelogin")
+  latest=$(get_github_latest_tag "Azure/kubelogin") || return 1
   if [[ "$current" == "$latest" ]]; then
     echo "✓ kubelogin already at latest ($current)"
     return
@@ -366,7 +382,7 @@ update_azd() {
   local current latest num
   current=$(azd version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
   # azd tags its releases azure-dev-cli_<version>, not v<version>.
-  latest=$(get_github_latest_tag "Azure/azure-dev")
+  latest=$(get_github_latest_tag "Azure/azure-dev") || return 1
   num="${latest##*_}"
   if [[ "$current" == "$num" ]]; then
     echo "✓ azd already at latest ($current)"

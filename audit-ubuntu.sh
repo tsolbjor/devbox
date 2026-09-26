@@ -158,7 +158,10 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
     check_rc_marker  "$rc" 'devbox: fnm ---'    'fnm init'
     check_rc_marker  "$rc" 'devbox: eza aliases ---' 'eza aliases'
     check_rc_marker  "$rc" 'devbox terminal cwd' 'terminal cwd/title reporting'
-    check_rc_present "$rc" 'fzf'                 'fzf integration'
+    # A line that loads fzf, not a mention — the zsh history keys block names
+    # fzf-completion without loading it, so a bare 'fzf' match could never fail.
+    # Same expression as FZF_LOAD_RE in setup-ubuntu.sh.
+    check_rc_present "$rc" '^[[:space:]]*(source|eval|\.)[^#]*fzf|^plugins=\(([^)]*[[:space:]])?fzf([[:space:]]|\))' 'fzf integration'
   done
   check_rc_marker "$HOME/.bashrc" 'devbox: bash history ---'     'bash history settings'
   check_rc_marker "$HOME/.zshrc"  'devbox: zsh history ---'      'zsh history settings'
@@ -286,6 +289,16 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
         report_drift "git config --global $key is unset." "fix: bash setup-ubuntu.sh"
       fi
     done
+    # HTTPS auth via the Windows Git Credential Manager (ensure_git_credential_manager),
+    # checked only where setup would have wired it: on WSL, with Git for Windows present.
+    gcm="/mnt/c/Program Files/Git/mingw64/bin/git-credential-manager.exe"
+    if grep -q '^USE_WINDOWS_GCM="${USE_WINDOWS_GCM:-true}"' "$SETUP" && [[ -x "$gcm" ]]; then
+      helper=$(git config --global --get credential.helper 2>/dev/null)
+      if [[ "$helper" != "${gcm// /\\ }" ]]; then
+        report_drift "git credential.helper is '${helper:-unset}', not the Windows Git Credential Manager." \
+          "fix: bash setup-ubuntu.sh" "keep: set USE_WINDOWS_GCM=false in setup-ubuntu.sh"
+      fi
+    fi
   fi
 fi
 

@@ -92,9 +92,9 @@ Installs and configures:
 | Azure | Azure Developer CLI (`azd`) — provisions and deploys an Aspire AppHost |
 | Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern, kubelogin (Entra auth for AKS) |
 | Containers | verifies Rancher Desktop's docker is wired into WSL |
-| Git | user config (auto-detected from Windows), defaults, SSH commit signing |
+| Git | user config (auto-detected from Windows), defaults, SSH commit signing, HTTPS auth via the Windows Git Credential Manager |
 | SSH | ed25519 key pair |
-| System | /etc/wsl.conf (automount metadata, systemd) |
+| System | /etc/wsl.conf (automount metadata, systemd — merged key by key, other settings kept) |
 
 After the script finishes it prints your SSH public key and next steps.
 

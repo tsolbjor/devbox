@@ -108,6 +108,8 @@ INSTALL_DOTNET_TOOLS="${INSTALL_DOTNET_TOOLS:-true}"  # .NET global tools (dotne
 INSTALL_PYTHON="${INSTALL_PYTHON:-true}"          # python3 venv/pip + pipx + uv
 DOCKER_CHECK="${DOCKER_CHECK:-true}"              # verify Rancher Desktop's docker is wired into WSL
 GIT_SIGN_COMMITS="${GIT_SIGN_COMMITS:-true}"      # SSH-sign commits/tags with the generated key
+USE_WINDOWS_GCM="${USE_WINDOWS_GCM:-true}"        # HTTPS git auth via Git for Windows' Credential Manager
+                                                  # (Entra/browser sign-in; Azure DevOps and GitHub)
 
 # Git defaults
 GIT_DEFAULT_BRANCH="${GIT_DEFAULT_BRANCH:-main}"
@@ -214,6 +216,25 @@ ensure_git_safe_directory() {
   fi
 }
 
+# HTTPS remotes authenticate through the Windows Git Credential Manager that Git
+# for Windows ships (setup-windows.ps1 installs it): browser/Entra sign-in, tokens
+# kept in the Windows credential store, one login shared by both sides. The SSH
+# key below still covers GitHub over SSH; Azure DevOps clients mostly hand out
+# HTTPS URLs, which is where this earns its place.
+ensure_git_credential_manager() {
+  local gcm="/mnt/c/Program Files/Git/mingw64/bin/git-credential-manager.exe"
+  if [[ ! -x "$gcm" ]]; then
+    echo "⚠ Git Credential Manager not found at $gcm — install Git for Windows (setup-windows.ps1), then rerun"
+    return
+  fi
+  # credential.helper is run through the shell, so the space must stay escaped.
+  ensure_git_config "credential.helper" "${gcm// /\\ }"
+  # Azure Repos scopes credentials per organisation, which lives in the URL path.
+  # Scoped to dev.azure.com rather than set globally: a global useHttpPath makes
+  # GCM store (and prompt for) a separate GitHub credential per repository.
+  ensure_git_config "credential.https://dev.azure.com.useHttpPath" "true"
+}
+
 ensure_ssh_key() {
   if [[ -f "$SSH_KEY_PATH" ]]; then
     echo "✓ SSH key exists: $SSH_KEY_PATH"
@@ -230,9 +251,25 @@ ensure_command() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# Latest release tag of a GitHub repo, or a non-zero return with a reason.
+# Unauthenticated, the API allows 60 calls/hour per IP — a corporate NAT shares
+# that budget with everyone behind it, and an empty tag would otherwise build a
+# URL like .../download//k9s_... that fails with an unrelated-looking curl/tar
+# error. So authenticate when a token is to hand, and fail clearly when not.
 gh_latest_tag() {
-  curl -fsSL "https://api.github.com/repos/${1}/releases/latest" \
-    | grep '"tag_name"' | cut -d'"' -f4
+  local repo="$1" tag token="${GITHUB_TOKEN:-${GH_TOKEN:-}}" auth=()
+  if [[ -z "$token" ]] && ensure_command gh; then
+    token="$(gh auth token 2>/dev/null || true)"
+  fi
+  [[ -n "$token" ]] && auth=(-H "Authorization: Bearer $token")
+  tag="$(curl -fsSL "${auth[@]}" "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null \
+    | grep '"tag_name"' | cut -d'"' -f4)" || true
+  if [[ -z "$tag" ]]; then
+    echo "⚠ Could not resolve the latest ${repo} release — GitHub API rate limit or no network?" >&2
+    echo "  Authenticate and rerun: export GITHUB_TOKEN=... or run 'gh auth login'" >&2
+    return 1
+  fi
+  printf '%s\n' "$tag"
 }
 
 ensure_kubectl() {
@@ -281,13 +318,16 @@ ensure_k9s() {
   fi
   echo "→ Installing k9s (latest)"
   local version arch
-  version=$(curl -fsSL https://api.github.com/repos/derailed/k9s/releases/latest \
-    | grep '"tag_name"' | cut -d'"' -f4)
+  version=$(gh_latest_tag derailed/k9s)
   arch=$(dpkg --print-architecture)
   curl -fsSL "https://github.com/derailed/k9s/releases/download/${version}/k9s_Linux_${arch}.tar.gz" \
     | sudo tar -xz -C /usr/local/bin k9s
   echo "✓ k9s ${version} installed"
 }
+
+# An rc line that loads fzf: `eval "$(fzf --zsh)"`, `source .../key-bindings.zsh`,
+# or omz's own fzf plugin. audit-ubuntu.sh uses the same expression.
+FZF_LOAD_RE='^[[:space:]]*(source|eval|\.)[^#]*fzf|^plugins=\(([^)]*[[:space:]])?fzf([[:space:]]|\))'
 
 ensure_fzf_shell_integration() {
   ensure_command fzf || { echo "⚠ fzf not installed; skipping shell integration"; return; }
@@ -303,7 +343,10 @@ ensure_fzf_shell_integration() {
     local rc="$HOME/${pair%%:*}"
     local shell="${pair##*:}"
     [[ -f "$rc" ]] || continue
-    if grep -q 'fzf' "$rc"; then
+    # A line that *loads* fzf, not one that merely mentions it: the "zsh history
+    # keys" block names fzf-completion / FZF_CTRL_R_OPTS without loading anything,
+    # so a bare `grep fzf` would call a machine without the integration wired.
+    if grep -qE "$FZF_LOAD_RE" "$rc"; then
       echo "✓ fzf already in $(basename "$rc")"
       continue
     fi
@@ -332,21 +375,60 @@ ensure_fzf_shell_integration() {
   done
 }
 
+# Set `key = value` under [section] of an INI file IN PLACE, leaving every other
+# line alone: an existing key is rewritten where it sits, a missing one is added at
+# the end of its section, a missing section is appended. A key that already holds
+# the value keeps its original spelling (`key=value` vs `key = value`).
+# Returns 0 when the file changed, 1 when it already matched.
+ini_set() {
+  local file="$1" section="$2" key="$3" value="$4" tmp
+  tmp="$(mktemp)"
+  awk -v sec="$section" -v key="$key" -v val="$value" '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    function flush() { if (insec && !done) { print key " = " val; done = 1 } }
+    /^[[:space:]]*\[.*\][[:space:]]*$/ {
+      flush()
+      s = trim($0); s = substr(s, 2, length(s) - 2)
+      insec = (trim(s) == sec); if (insec) seen = 1
+      print; next
+    }
+    insec && !done && index($0, "=") {
+      k = trim(substr($0, 1, index($0, "=") - 1))
+      if (k == key) {
+        v = trim(substr($0, index($0, "=") + 1))
+        print (v == val ? $0 : key " = " val); done = 1; next
+      }
+    }
+    { print }
+    END {
+      flush()
+      if (!seen) { if (NR > 0) print ""; print "[" sec "]"; print key " = " val }
+    }
+  ' "$file" > "$tmp"
+  if cmp -s "$tmp" "$file"; then rm -f "$tmp"; return 1; fi
+  mv "$tmp" "$file"
+}
+
+# Merged key by key, never written wholesale: /etc/wsl.conf also carries settings
+# this script does not own — notably `[user] default=<name>`, which the first-run
+# setup of the newer tar-based WSL distros writes there. Dropping that line makes
+# the distro log in as root on its next start.
 ensure_wsl_conf() {
-  local conf="/etc/wsl.conf"
-  local boot_line=""
-  [[ "$WSL_ENABLE_SYSTEMD" == "true" ]] && boot_line=$'\n[boot]\nsystemd = true'
-  local desired="[automount]
-options = metadata${boot_line}
-"
-  local current=""
-  [[ -f "$conf" ]] && current=$(cat "$conf")
-  if [[ "$current" == "$desired" ]]; then
+  local conf="/etc/wsl.conf" tmp changed=false
+  tmp="$(mktemp)"
+  if [[ -f "$conf" ]]; then cp "$conf" "$tmp"; fi
+  ini_set "$tmp" automount options metadata && changed=true
+  if [[ "$WSL_ENABLE_SYSTEMD" == "true" ]]; then
+    ini_set "$tmp" boot systemd true && changed=true
+  fi
+  if [[ "$changed" == "false" ]]; then
+    rm -f "$tmp"
     echo "✓ /etc/wsl.conf already matches desired settings"
     return
   fi
-  echo "→ Writing /etc/wsl.conf"
-  printf '%s' "$desired" | sudo tee "$conf" > /dev/null
+  echo "→ Updating /etc/wsl.conf (merging [automount]/[boot]; other settings kept)"
+  sudo install -m 0644 "$tmp" "$conf"
+  rm -f "$tmp"
   echo "✓ /etc/wsl.conf updated — run 'wsl --shutdown' from Windows then reopen WSL to apply."
   echo "  Note: network settings like mirrored mode and localhostForwarding belong in %UserProfile%/.wslconfig on Windows, not /etc/wsl.conf."
 }
@@ -361,8 +443,7 @@ ensure_kubectx() {
   fi
   echo "→ Installing kubectx and kubens (latest)"
   local version dpkg_arch arch
-  version=$(curl -fsSL https://api.github.com/repos/ahmetb/kubectx/releases/latest \
-    | grep '"tag_name"' | cut -d'"' -f4)
+  version=$(gh_latest_tag ahmetb/kubectx)
   dpkg_arch=$(dpkg --print-architecture)
   arch=$([ "$dpkg_arch" = "amd64" ] && echo "x86_64" || echo "$dpkg_arch")
   local base="https://github.com/ahmetb/kubectx/releases/download/${version}"
@@ -1459,6 +1540,9 @@ if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
   ensure_git_config "pull.rebase" "false"
   ensure_git_config "push.autoSetupRemote" "true"
   ensure_git_safe_directory "$CODE_DIR"
+  if [[ "$USE_WINDOWS_GCM" == "true" ]] && grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then
+    ensure_git_credential_manager
+  fi
 fi
 
 if [[ "$INSTALL_GITHUB_CLI" == "true" ]]; then
