@@ -65,7 +65,13 @@ function Ensure-Thing {
 
 ## Testing
 
-Run the script on a clean machine (or a fresh WSL distro) and verify everything installs correctly. Then run it a second time — the second run should produce only `✓` lines and make no changes to the system.
+CI runs on every push and pull request: shellcheck and PSScriptAnalyzer, a check that every `.ps1` loads under Windows PowerShell 5.1, and `setup-ubuntu.sh` twice in a blank `ubuntu:24.04` container — the second run must produce only `✓` lines — followed by `audit-ubuntu.sh`, which must find no drift. Run the Ubuntu job locally with:
+
+```bash
+docker run --rm -v "$PWD:/src:ro" ubuntu:24.04 bash /src/.github/ci/ubuntu-idempotency.sh
+```
+
+The Windows script has no end-to-end CI (winget, WSL and Rancher Desktop don't run on a hosted runner). Run it on a clean machine, then again — the second run should produce only `✓` lines. Save `.ps1` files as UTF-8 with a BOM (`bootstrap-windows.ps1`: pure ASCII) — see CLAUDE.md.
 
 For the Windows script, the Rancher Desktop function requires that app to have been launched at least once before its settings file exists. WezTerm needs no prior launch — the script writes a managed `~/.wezterm.lua` directly.
 

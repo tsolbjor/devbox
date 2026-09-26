@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        run: shellcheck --severity=warning *.sh .github/ci/*.sh
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          $r = Invoke-ScriptAnalyzer -Path . -Recurse -Settings .github/PSScriptAnalyzerSettings.psd1
+          $r | Format-Table RuleName, ScriptName, Line, Message -AutoSize -Wrap | Out-String -Width 200
+          if ($r) { exit 1 }
+
+  # Windows PowerShell 5.1 is what a fresh machine runs the scripts in, and it
+  # decodes source files differently from pwsh 7 — see the test's header.
+  windows-powershell-5:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Scripts load under Windows PowerShell 5.1
+        shell: powershell
+        run: .\.github\ci\Test-WindowsPowerShellLoad.ps1
+
+  # setup-ubuntu.sh twice on a blank Ubuntu, then the audit. A clean container
+  # rather than the runner itself: the runner image ships kubectl, helm, node,
+  # dotnet, … preinstalled, and every ensure_* would short-circuit past the code
+  # under test. Reproduce locally with the docker command in the harness header.
+  ubuntu-idempotency:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: setup twice, then audit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # release lookups: the anonymous API limit is per IP
+        run: |
+          mkdir -p logs
+          docker run --rm -e GITHUB_TOKEN -e LOGS=/logs \
+            -v "$PWD:/src:ro" -v "$PWD/logs:/logs" \
+            ubuntu:24.04 bash /src/.github/ci/ubuntu-idempotency.sh
+      - name: Upload run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-idempotency-logs
+          path: logs/

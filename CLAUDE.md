@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-Idempotent setup scripts for a Windows + WSL2 development environment. There are no build steps, tests, or CI pipelines — the scripts *are* the product.
+Idempotent setup scripts for a Windows + WSL2 development environment. There are no build steps — the scripts *are* the product. CI (`.github/workflows/ci.yml`) lints them (shellcheck, PSScriptAnalyzer with `.github/PSScriptAnalyzerSettings.psd1`), checks every `.ps1` loads under Windows PowerShell 5.1, and runs `setup-ubuntu.sh` twice in a blank `ubuntu:24.04` container followed by the audit: the rerun must print no `→` line and the audit must find no drift. Reproduce that job locally with the `docker run` line in `.github/ci/ubuntu-idempotency.sh`.
 
 ## Scripts
 
@@ -68,6 +68,7 @@ bash setup-ubuntu.sh
 
 ### PowerShell (`setup-windows.ps1`, `bootstrap-windows.ps1`, `update-windows.ps1`)
 - Strict mode: `Set-StrictMode -Version Latest`, `$ErrorActionPreference = "Stop"`
+- **Encoding is load-bearing.** Every `.ps1` run from disk is UTF-8 *with* a BOM: Windows PowerShell 5.1 reads a BOM-less file as Windows-1252, where the UTF-8 bytes of `✓`/`→`/`—` include curly quotes it parses as string delimiters, and the script fails to load. The Edit/Write tools keep an existing BOM; a new file needs one added. `bootstrap-windows.ps1` is the exception — it also runs as `irm | iex`, where a BOM becomes a stray U+FEFF, so it stays pure ASCII and builds its status glyphs from code points. pwsh 7 hides both problems; `.github/ci/Test-WindowsPowerShellLoad.ps1` catches them
 - Functions: `PascalCase` verb-noun — `Ensure-WSL`, `Install-WingetPackage`, `Get-SystemResources`
 - Config: top-level `$Config` hashtable; `$null` values are resolved at runtime (e.g. WSL memory auto-detects to 75% of system RAM via `Get-SystemResources` + `Get-WslAllocation`)
 - Rancher Desktop settings are merged into its existing `settings.json` — never wholesale replaced

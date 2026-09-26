@@ -245,6 +245,7 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
   # rendered and thrown away. (Double-loaded plugins are checked per plugin above.)
   want_omz=$(grep -m1 '^INSTALL_OMZ=' "$SETUP" 2>/dev/null | grep -oE 'true|false' | head -1 || true)
   if [[ -d "$HOME/.oh-my-zsh" ]]; then
+    # shellcheck disable=SC2088  # a literal ~ in a message, not a path
     grep -q 'oh-my-zsh.sh' "$HOME/.zshrc" 2>/dev/null \
       || report_drift "~/.oh-my-zsh installed but .zshrc never sources it." "fix: bash setup-ubuntu.sh"
     omz_theme=$(grep -m1 '^ZSH_THEME=' "$HOME/.zshrc" 2>/dev/null || true)
@@ -261,6 +262,7 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
   if [[ -f "$HOME/.config/starship.toml" ]]; then
     report_ok "starship.toml present."
   else
+    # shellcheck disable=SC2088  # a literal ~ in a message, not a path
     report_drift "~/.config/starship.toml missing." "fix: bash setup-ubuntu.sh"
   fi
 
