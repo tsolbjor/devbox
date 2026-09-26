@@ -4,21 +4,21 @@
 #
 # Minimal first-run bootstrap for a BLANK, Entra-joined Windows PC.
 # Ensures the prerequisites that setup-windows.ps1 assumes already exist:
-#   1. winget (App Installer)      — verified, not installed (comes from the Store)
-#   2. Git                          — winget-installed if missing
-#   3. A Dev Drive at D:            — created as a VHDX (ReFS, trusted) if absent
-#   4. This repo cloned to D:\code  — so setup-windows.ps1 is on disk to run
+#   1. winget (App Installer)      - verified, not installed (comes from the Store)
+#   2. Git                          - winget-installed if missing
+#   3. A Dev Drive at D:            - created as a VHDX (ReFS, trusted) if absent
+#   4. This repo cloned to D:\code  - so setup-windows.ps1 is on disk to run
 #
-# It intentionally does NOT install apps or touch WSL — that's setup-windows.ps1's job.
+# It intentionally does NOT install apps or touch WSL - that's setup-windows.ps1's job.
 # Run this once on a fresh machine, then run .\setup-windows.ps1 from the cloned folder.
 
 $Config = @{
-  # Dev Drive (backed by an expandable VHDX file — needs no unallocated disk space)
+  # Dev Drive (backed by an expandable VHDX file - needs no unallocated disk space)
   DevDrive = @{
     Create      = $true
     Letter      = "D"                      # target drive letter
     Label       = "Dev"                    # volume label
-    SizeGB      = 128                       # VHDX MAX size (Dev Drive min is 50 GB). Expandable —
+    SizeGB      = 128                       # VHDX MAX size (Dev Drive min is 50 GB). Expandable -
                                             # consumes real C: space only as it fills, so a big cap
                                             # is cheap. Raise for package caches / many repos on D:.
     VhdxPath    = "C:\DevDrives\Dev.vhdx"   # backing file; re-attached at boot via a scheduled task
@@ -38,6 +38,17 @@ $Config = @{
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# This file must stay pure ASCII. It runs two ways, and they disagree on
+# encoding: `irm | iex` hands it over as a string, where a UTF-8 BOM survives as
+# a stray U+FEFF that breaks the first command; run from disk, Windows
+# PowerShell 5.1 reads a BOM-less file as Windows-1252, where the UTF-8 bytes of
+# a glyph like the check mark include 0x93/0x94 - curly quotes, which PowerShell
+# treats as string delimiters. ASCII reads the same either way, so the status
+# glyphs are built from code points instead. (The other .ps1 files are only run
+# from disk and carry a BOM.)
+$OK = [string][char]0x2713   # check mark: already done
+$GO = [string][char]0x2192   # arrow: taking action
 
 function Assert-Admin {
   $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -60,7 +71,7 @@ function Update-SessionPath {
 
 function Ensure-Winget {
   if (Test-Command "winget") {
-    Write-Host "✓ winget available" -ForegroundColor Green
+    Write-Host "$OK winget available" -ForegroundColor Green
     return
   }
   throw "winget is not available. Install 'App Installer' from the Microsoft Store (or run 'winget' once to trigger setup), then rerun this script."
@@ -68,10 +79,10 @@ function Ensure-Winget {
 
 function Ensure-Git {
   if (Test-Command "git") {
-    Write-Host "✓ Git already installed" -ForegroundColor Green
+    Write-Host "$OK Git already installed" -ForegroundColor Green
     return
   }
-  Write-Host "→ Installing Git" -ForegroundColor Cyan
+  Write-Host "$GO Installing Git" -ForegroundColor Cyan
   winget install --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements
   Update-SessionPath
   if (-not (Test-Command "git")) {
@@ -89,18 +100,18 @@ function Ensure-DevDrive {
 
   $letter = $Spec.Letter.TrimEnd(":")
   if (Test-Path "$letter`:\") {
-    Write-Host "✓ Drive $letter`: already exists — skipping Dev Drive creation" -ForegroundColor Green
+    Write-Host "$OK Drive $letter`: already exists - skipping Dev Drive creation" -ForegroundColor Green
     return
   }
 
   if (Test-Path $Spec.VhdxPath) {
-    Write-Host "→ VHDX $($Spec.VhdxPath) exists but is not attached — attaching" -ForegroundColor Cyan
+    Write-Host "$GO VHDX $($Spec.VhdxPath) exists but is not attached - attaching" -ForegroundColor Cyan
     Mount-DiskImage -ImagePath $Spec.VhdxPath | Out-Null
     Register-DevDriveAutoMount -VhdxPath $Spec.VhdxPath
     return
   }
 
-  Write-Host "→ Creating Dev Drive $letter`: ($($Spec.SizeGB) GB, VHDX at $($Spec.VhdxPath))" -ForegroundColor Cyan
+  Write-Host "$GO Creating Dev Drive $letter`: ($($Spec.SizeGB) GB, VHDX at $($Spec.VhdxPath))" -ForegroundColor Cyan
 
   $vhdxDir = Split-Path $Spec.VhdxPath -Parent
   if (-not (Test-Path $vhdxDir)) { New-Item -ItemType Directory -Path $vhdxDir -Force | Out-Null }
@@ -126,7 +137,7 @@ exit
 
   Format-DevVolume -Letter $letter -Spec $Spec
   Register-DevDriveAutoMount -VhdxPath $Spec.VhdxPath
-  Write-Host "✓ Dev Drive $letter`: ready" -ForegroundColor Green
+  Write-Host "$OK Dev Drive $letter`: ready" -ForegroundColor Green
 }
 
 # Format the freshly-created partition as a Dev Drive (ReFS + trust), or NTFS as fallback.
@@ -137,7 +148,7 @@ function Format-DevVolume {
   if ($supportsDevDrive) {
     try {
       Format-Volume -DriveLetter $Letter -DevDrive -FileSystemLabel $Spec.Label -Confirm:$false | Out-Null
-      Write-Host "✓ Formatted $Letter`: as a Dev Drive (ReFS)" -ForegroundColor Green
+      Write-Host "$OK Formatted $Letter`: as a Dev Drive (ReFS)" -ForegroundColor Green
       return
     } catch {
       Write-Warning "Dev Drive formatting failed ($($_.Exception.Message))."
@@ -149,7 +160,7 @@ function Format-DevVolume {
   if ($Spec.FallbackNTFS) {
     Write-Warning "Falling back to NTFS for $Letter`:."
     Format-Volume -DriveLetter $Letter -FileSystem NTFS -NewFileSystemLabel $Spec.Label -Confirm:$false | Out-Null
-    Write-Host "✓ Formatted $Letter`: as NTFS" -ForegroundColor Green
+    Write-Host "$OK Formatted $Letter`: as NTFS" -ForegroundColor Green
   } else {
     throw "Could not format $Letter`: as a Dev Drive and FallbackNTFS is disabled."
   }
@@ -169,7 +180,7 @@ function Register-DevDriveAutoMount {
 
   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
     -Principal $principal -Settings $settings -Force | Out-Null
-  Write-Host "✓ Registered boot task '$taskName' to re-attach the Dev Drive" -ForegroundColor Green
+  Write-Host "$OK Registered boot task '$taskName' to re-attach the Dev Drive" -ForegroundColor Green
 }
 
 function Ensure-Repo {
@@ -183,11 +194,11 @@ function Ensure-Repo {
   $target = Join-Path $Spec.CloneRoot $repoName
 
   if (Test-Path (Join-Path $target ".git")) {
-    Write-Host "✓ Repo already cloned at $target" -ForegroundColor Green
+    Write-Host "$OK Repo already cloned at $target" -ForegroundColor Green
     return $target
   }
 
-  Write-Host "→ Cloning $($Spec.Url) → $target" -ForegroundColor Cyan
+  Write-Host "$GO Cloning $($Spec.Url) -> $target" -ForegroundColor Cyan
   git clone $Spec.Url $target
   return $target
 }
@@ -201,6 +212,6 @@ $repoPath = Ensure-Repo -Spec $Config.Repo
 
 Write-Host ""
 Write-Host "Bootstrap complete." -ForegroundColor Green
-Write-Host "Next step — run the full setup as Administrator:" -ForegroundColor Yellow
+Write-Host "Next step - run the full setup as Administrator:" -ForegroundColor Yellow
 Write-Host "    Set-Location `"$repoPath`"" -ForegroundColor White
 Write-Host "    .\setup-windows.ps1" -ForegroundColor White

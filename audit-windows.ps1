@@ -1,4 +1,4 @@
-# =========================
+﻿# =========================
 # PARAMETERS (edit these)
 # =========================
 #
@@ -267,9 +267,12 @@ function Save-IgnoreList {
 
   $ext = $pair.Item2.Extent
   $updated = $raw.Substring(0, $ext.StartOffset) + (Format-IgnoreLiteral -Ignore $Ignore) + $raw.Substring($ext.EndOffset)
-  # No BOM: these scripts are stored without one, and Set-Content -Encoding UTF8
-  # under Windows PowerShell 5.1 would add one.
-  [System.IO.File]::WriteAllText($Path, $updated, (New-Object System.Text.UTF8Encoding($false)))
+  # WITH a BOM, explicitly — the encoding differs between Set-Content on 5.1 and
+  # on 7, so neither is left to decide. Without one, Windows PowerShell 5.1 reads
+  # the file as Windows-1252, where the UTF-8 bytes of ✓ / → / — include curly
+  # quotes that PowerShell parses as string delimiters, and the script no longer
+  # loads. $raw came from Get-Content, which already stripped the old BOM.
+  [System.IO.File]::WriteAllText($Path, $updated, (New-Object System.Text.UTF8Encoding($true)))
 }
 
 # --- load expected state ---
