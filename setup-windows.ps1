@@ -14,6 +14,11 @@ $Config = @{
   # Git for Windows global config (applied after Git is installed)
   GitConfig = @{
     Configure       = $true
+    # Identity. $null = keep what git already has, else detect it the way
+    # setup-ubuntu.sh does: email from the Entra UPN (whoami /upn), name from the
+    # Windows logon display name. Set a value to force it.
+    UserName        = $null
+    UserEmail       = $null
     AutoCRLF        = "true"   # Windows: convert LF→CRLF on checkout (opposite of WSL's "input")
     DefaultBranch   = "main"
     PullRebase      = "false"
@@ -212,7 +217,9 @@ function Install-WingetPackage {
   param(
     [Parameter(Mandatory=$true)][string]$Id
   )
-  $list = winget list --id $Id --accept-source-agreements 2>$null | Out-String
+  # -e: without it --id is a substring match, so "Microsoft.PowerShell" would
+  # report installed on a machine that only has Microsoft.PowerShell.Preview.
+  $list = winget list --id $Id -e --accept-source-agreements 2>$null | Out-String
   if ($list -match [regex]::Escape($Id)) {
     Write-Host "✓ Already installed: $Id" -ForegroundColor Green
     return
@@ -220,7 +227,25 @@ function Install-WingetPackage {
 
   Write-Host "→ Installing: $Id" -ForegroundColor Cyan
   winget install --id $Id -e --silent --accept-package-agreements --accept-source-agreements
+  # $ErrorActionPreference = "Stop" does not reach a native command's exit code,
+  # so a failed install would otherwise scroll past unnoticed. Recorded and
+  # summarised at the end rather than thrown: one bad package should not stop
+  # the rest of the machine being set up.
+  $code = $LASTEXITCODE
+  if ($code -in $script:WingetOkExitCodes) { return }
+  $hex = '0x{0:X8}' -f $code
+  Write-Warning "winget install $Id failed (exit $hex)"
+  $script:FailedInstalls += "$Id ($hex)"
 }
+
+# 0 = installed; the others mean the package is already there, which a
+# versionless `winget list` can miss (e.g. a newer version installed outside winget).
+$script:WingetOkExitCodes = @(
+  0,
+  -1978335189,   # 0x8A15002B  no applicable update / already current
+  -1978335135    # 0x8A150061  package already installed
+)
+$script:FailedInstalls = @()
 
 function Get-InstalledFontFamilies {
   $fontFamilies = [System.Collections.Generic.List[string]]::new()
@@ -1192,6 +1217,46 @@ function Ensure-GitSetting {
   git config --global $Key $Value
 }
 
+# user.name / user.email for Git for Windows. Without them the first commit from
+# pwsh fails with "Please tell me who you are". Precedence: an explicit $Config
+# value, then whatever git already has, then detection — so a rerun never
+# overwrites an identity set by hand.
+function Ensure-GitIdentity {
+  param($GitConfig)
+  $email = $GitConfig.UserEmail
+  if (-not $email) { $email = git config --global --get user.email }
+  if (-not $email) {
+    # try/catch: on a non-domain account whoami writes an error to stderr, which
+    # Windows PowerShell 5.1 turns into a terminating error under "Stop".
+    try {
+      $upn = "$(whoami.exe /upn 2>$null | Select-Object -First 1)".Trim()
+      if ($upn -match '^[^@\s]+@[^@\s]+\.[^@\s]+$') {
+        $email = $upn
+        Write-Host "→ Detected Git email from Windows UPN: $email" -ForegroundColor Cyan
+      }
+    } catch { }
+  }
+
+  $name = $GitConfig.UserName
+  if (-not $name) { $name = git config --global --get user.name }
+  if (-not $name) {
+    $name = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI" `
+      -Name LastLoggedOnDisplayName -ErrorAction SilentlyContinue).LastLoggedOnDisplayName
+    if ($name) { Write-Host "→ Detected Git name from Windows logon display name: $name" -ForegroundColor Cyan }
+  }
+  if (-not $name -and $email) {
+    # thomas.solbjor@… → Thomas Solbjor, the same fallback setup-ubuntu.sh uses.
+    $local = ($email -split '@')[0] -replace '[._-]+', ' '
+    $name = (Get-Culture).TextInfo.ToTitleCase($local.ToLower()).Trim()
+    Write-Host "→ Derived Git name from email local-part: $name" -ForegroundColor Cyan
+  }
+
+  if ($email) { Ensure-GitSetting "user.email" $email }
+  else { Write-Warning "Could not detect a Git email — set GitConfig.UserEmail, or run: git config --global user.email you@example.com" }
+  if ($name) { Ensure-GitSetting "user.name" $name }
+  else { Write-Warning "Could not detect a Git name — set GitConfig.UserName, or run: git config --global user.name 'Your Name'" }
+}
+
 function Ensure-WindowsGitConfig {
   param($GitConfig)
   # winget has just put git (and delta) on the machine PATH, but this session's
@@ -1202,6 +1267,7 @@ function Ensure-WindowsGitConfig {
     Write-Warning "git not in PATH yet — open a new terminal after installation and rerun to apply git config."
     return
   }
+  Ensure-GitIdentity -GitConfig $GitConfig
   Ensure-GitSetting "core.autocrlf"        $GitConfig.AutoCRLF
   Ensure-GitSetting "init.defaultBranch"   $GitConfig.DefaultBranch
   Ensure-GitSetting "pull.rebase"          $GitConfig.PullRebase
@@ -1472,6 +1538,12 @@ if ($Config.ExcludeWslFromDefender) { Add-WslDefenderExclusion }
 if ($Config.DevDrivePackageCaches.Configure) { Ensure-DevDrivePackageCaches -Spec $Config.DevDrivePackageCaches }
 
 Write-Progress -Activity "devbox setup" -Completed
+if ($script:FailedInstalls.Count -gt 0) {
+  Write-Host "`nDone, but $($script:FailedInstalls.Count) winget install(s) failed:" -ForegroundColor Yellow
+  $script:FailedInstalls | ForEach-Object { Write-Host "  ⚠ $_" -ForegroundColor Yellow }
+  Write-Host "Rerun setup to retry; 'winget install --id <id> -e' shows the full error." -ForegroundColor Yellow
+  exit 1
+}
 Write-Host "`nDone." -ForegroundColor Green
 Write-Host "Tip: Apply WSL resource changes with: wsl --shutdown" -ForegroundColor Cyan
 Write-Host "Tip: Restart Rancher Desktop to apply VM resource changes." -ForegroundColor Cyan

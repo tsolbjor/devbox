@@ -619,6 +619,17 @@ if ($Config.CheckConfigFiles) {
         Report-Drift "git $k = '$cur' (expected '$($gitWant[$k])')." @("fix: git config --global $k `"$($gitWant[$k])`"")
       }
     }
+    # Identity has no single expected value (Ensure-GitIdentity keeps what is set,
+    # else detects it) — only that it is set, or the first commit fails.
+    foreach ($k in @("user.name", "user.email")) {
+      $want = if ($k -eq "user.name") { $setup.GitConfig.UserName } else { $setup.GitConfig.UserEmail }
+      $cur = (git config --global --get $k) 2>$null
+      if (-not $cur) {
+        Report-Drift "git $k is unset — commits will fail." @("fix: .\setup-windows.ps1 (detects it from the Entra user), or git config --global $k `"...`"")
+      } elseif ($want -and $cur -ne $want) {
+        Report-Drift "git $k = '$cur' (expected '$want')." @("fix: git config --global $k `"$want`"")
+      }
+    }
   }
 }
 

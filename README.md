@@ -60,7 +60,7 @@ Installs and configures:
 | PowerShell UX | fzf + PSFzf (Ctrl+T / Ctrl+R), PSReadLine predictive IntelliSense (ListView) |
 | Package caches | npm + NuGet caches relocated onto the `D:` Dev Drive (per-user env vars) |
 | System | Long path support, OpenSSH Agent, Defender exclusion for WSL vhdx |
-| Git | autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote, delta as the diff pager |
+| Git | identity (auto-detected from the Entra user unless already set), autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote, delta as the diff pager |
 
 ### 2. Ubuntu / WSL
 
