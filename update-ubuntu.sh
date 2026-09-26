@@ -17,10 +17,13 @@ UPDATE_KUBECTX="${UPDATE_KUBECTX:-true}"
 UPDATE_KUBELOGIN="${UPDATE_KUBELOGIN:-true}"
 UPDATE_AZD="${UPDATE_AZD:-true}"                     # azd CLI (re-runs the Microsoft installer)
 UPDATE_DOTNET_TOOLS="${UPDATE_DOTNET_TOOLS:-true}"   # dotnet tool update -g, per installed global tool
+UPDATE_NODE="${UPDATE_NODE:-true}"                   # fnm itself + latest patch of the default Node major
+FNM_DIR="${FNM_DIR:-$HOME/.local/share/fnm}"         # keep in step with setup-ubuntu.sh
 
 # Major-version moves for the node / kubectl pins in setup-ubuntu.sh. OFF by
-# default and never part of a routine refresh: these rewrite an apt source and
-# replace the installed major version, so each one asks first. (The dotnet pin is
+# default and never part of a routine refresh: kubectl's rewrites an apt source
+# and replaces the installed minor, node's moves the fnm default every new shell
+# gets, so each one asks first. (The dotnet pin is
 # not here — SDKs coexist, so ensure_dotnet handles that on a plain setup rerun.)
 UPDATE_PINS="${UPDATE_PINS:-false}"                  # --pins
 PINS_ASSUME_YES="${PINS_ASSUME_YES:-false}"          # --pins-yes: take every prompt as yes
@@ -50,6 +53,7 @@ Usage: update-ubuntu.sh [options]
   --skip-kubelogin     Skip kubelogin update
   --skip-azd           Skip Azure Developer CLI update
   --skip-dotnet-tools  Skip .NET global tool updates
+  --skip-node          Skip fnm + Node patch update
   --pins               Offer to move node/kubectl to the versions pinned in
                        setup-ubuntu.sh (asks before each; off by default)
   --pins-yes           As --pins, but answer yes to every prompt
@@ -74,6 +78,7 @@ while [[ $# -gt 0 ]]; do
     --skip-kubelogin)    UPDATE_KUBELOGIN=false ;;
     --skip-azd)          UPDATE_AZD=false ;;
     --skip-dotnet-tools) UPDATE_DOTNET_TOOLS=false ;;
+    --skip-node)         UPDATE_NODE=false ;;
     --pins)              UPDATE_PINS=true ;;
     --pins-yes)          UPDATE_PINS=true; PINS_ASSUME_YES=true ;;
     --skip-omz)          UPDATE_OMZ=false ;;
@@ -107,6 +112,21 @@ log() {
 
 ensure_command() {
   command -v "$1" >/dev/null 2>&1
+}
+
+# Put fnm and its default Node on PATH for this script (see setup-ubuntu.sh).
+activate_fnm() {
+  [[ -x "$FNM_DIR/fnm" ]] || return 1
+  export FNM_DIR
+  case ":$PATH:" in *":$FNM_DIR:"*) ;; *) export PATH="$FNM_DIR:$PATH" ;; esac
+  eval "$(fnm env --shell bash)"
+}
+
+# The version fnm's `default` alias points at (e.g. v24.21.0), or nothing.
+fnm_default_version() {
+  local link
+  link="$(readlink "$FNM_DIR/aliases/default" 2>/dev/null)" || return 0
+  basename "$(dirname "$link")"
 }
 
 get_github_latest_tag() {
@@ -410,25 +430,32 @@ update_pins() {
   fi
 
   # --- node ---
+  # Side by side under fnm: the new major is installed next to the old one and
+  # nothing is removed. What moves is the default — every new shell, and every
+  # directory without its own .nvmrc / .node-version, gets it.
   want=$(setup_pin NODE_MAJOR_VERSION || true)
-  have=$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || true)
-  if [[ -n "$want" && -n "$have" && "$have" != "$want" ]]; then
-    echo "→ node ${have}.x installed, pin is ${want}.x"
-    echo "  This rewrites /etc/apt/sources.list.d/nodesource.list and replaces the"
-    echo "  nodejs package. Globals in /usr/lib/node_modules survive, but anything"
-    echo "  with a native addon needs reinstalling against the new ABI."
-    if confirm_pin; then
-      echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${want}.x nodistro main" \
-        | sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
-      sudo apt-get update -y
-      sudo apt-get install -y nodejs
-      echo "✓ node now $(node --version 2>/dev/null)"
-      echo "  Reinstall global CLIs if any misbehave: bash setup-ubuntu.sh"
-    else
-      echo "  skipped"
+  if ! activate_fnm; then
+    echo "✓ fnm not installed, skipping node (bash setup-ubuntu.sh installs it)"
+  else
+    local default
+    default="$(fnm_default_version)"
+    have="${default#v}"; have="${have%%.*}"
+    if [[ -n "$want" && "$have" != "$want" ]]; then
+      echo "→ fnm default is node ${default:-unset}, pin is ${want}.x"
+      echo "  This installs ${want}.x alongside and makes it the fnm default. Projects"
+      echo "  that pin their own Node are unaffected. Globals live in the shared npm"
+      echo "  prefix and carry over, but anything with a native addon needs reinstalling"
+      echo "  against the new ABI."
+      if confirm_pin; then
+        fnm install "$want"
+        fnm default "$want"
+        echo "✓ fnm default now $(fnm_default_version)"
+      else
+        echo "  skipped"
+      fi
+    elif [[ -n "$want" ]]; then
+      echo "✓ fnm default already at the pinned ${want}.x ($default)"
     fi
-  elif [[ -n "$have" ]]; then
-    echo "✓ node already at the pinned ${want}.x"
   fi
 }
 
@@ -466,12 +493,45 @@ update_omz() {
   done
 }
 
+# fnm (re-running its installer replaces the binary in place), then the newest
+# patch of the default major. The replaced patch is uninstalled: it was only ever
+# the default, and projects asking for the major resolve to the new one. Majors are
+# never moved here — that is `--pins`.
+update_node() {
+  if ! activate_fnm; then
+    echo "✓ fnm not installed, skipping"
+    return
+  fi
+  echo "→ Updating fnm"
+  curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir "$FNM_DIR" --skip-shell >/dev/null
+  echo "✓ fnm $(fnm --version | awk '{print $2}')"
+
+  local current major latest
+  current="$(fnm_default_version)"
+  if [[ -z "$current" ]]; then
+    echo "✓ no fnm default set, skipping node"
+    return
+  fi
+  major="${current#v}"; major="${major%%.*}"
+  latest="$(fnm ls-remote 2>/dev/null | grep -oE "^v${major}\.[0-9]+\.[0-9]+" | tail -1 || true)"
+  if [[ -z "$latest" || "$latest" == "$current" ]]; then
+    echo "✓ node $current is the latest ${major}.x"
+    return
+  fi
+  echo "→ Updating node $current → $latest"
+  fnm install "$latest"
+  fnm default "$latest"
+  fnm uninstall "$current"
+  echo "✓ node now $latest (fnm default)"
+}
+
 update_npm_globals() {
+  activate_fnm || true
   if ! ensure_command npm; then
     echo "✓ npm not found, skipping"
     return
   fi
-  # setup-ubuntu.sh installs globals with `sudo npm install -g`, so the global
+  # Machines set up before fnm installed globals with `sudo npm install -g`, so the global
   # prefix is root-owned and a bare `npm update -g` dies with EACCES the moment an
   # update is actually available. Only reach for sudo when the prefix really isn't
   # ours — a user-level prefix (npm config set prefix ~/...) must update unelevated,
@@ -515,6 +575,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_KUBELOGIN"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_AZD"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_DOTNET_TOOLS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_NODE"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_PINS"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_OMZ"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_NPM_GLOBALS"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -532,6 +593,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_KUBELOGIN"   == "true" ]] && run_step "Updating kubelogin"        --skip-kubelogin    update_kubelogin
 [[ "$UPDATE_AZD"         == "true" ]] && run_step "Updating azd"              --skip-azd          update_azd
 [[ "$UPDATE_DOTNET_TOOLS" == "true" ]] && run_step "Updating .NET global tools" --skip-dotnet-tools update_dotnet_tools
+[[ "$UPDATE_NODE"        == "true" ]] && run_step "Updating fnm and Node"      --skip-node         update_node
 [[ "$UPDATE_PINS"        == "true" ]] && run_step "Reconciling version pins"  "(omit --pins)"     update_pins
 [[ "$UPDATE_OMZ"         == "true" ]] && run_step "Updating oh-my-zsh"          --skip-omz          update_omz
 [[ "$UPDATE_NPM_GLOBALS" == "true" ]] && run_step "Updating global npm packages" --skip-npm-globals update_npm_globals

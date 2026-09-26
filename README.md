@@ -47,7 +47,7 @@ Installs and configures:
 
 | Category | What gets set up |
 |---|---|
-| Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip, Node.js (host), Azure Functions Core Tools, Aspire CLI |
+| Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip, Node.js via fnm (host), Azure Functions Core Tools, Aspire CLI |
 | CLI tools | ripgrep, bat, fd, jq, git-delta, lazygit, GitHub CLI — the same basics `setup-ubuntu.sh` installs, so pwsh matches the WSL shell |
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (winget) |
 | Fonts | Cascadia Code, JetBrains Mono Nerd Font |
@@ -86,7 +86,7 @@ Installs and configures:
 |---|---|
 | Shell | zsh (set as default), Starship, fzf, zoxide, zsh-autosuggestions + zsh-syntax-highlighting |
 | Shell UX | 200 000-line history for bash and zsh (flushed per command), inline suggestions in a readable colour, PSReadLine-style accept keys (`→`, `Ctrl+→`, `Tab`), `Ctrl+R` history picker |
-| Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, wget, zip, git-delta, lazygit, GitHub CLI, Node.js |
+| Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, wget, zip, git-delta, lazygit, GitHub CLI, Node.js via fnm |
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (npm global) |
 | Languages | .NET SDK (10 LTS), Aspire CLI, `dotnet outdated` (NuGet's `ncu`), Python (venv/pip/pipx/uv) |
 | Azure | Azure Developer CLI (`azd`) — provisions and deploys an Aspire AppHost |
@@ -115,13 +115,13 @@ nothing new, only upgrade what's there. Safe to rerun anytime.
 
 ```powershell
 # Windows — as Administrator: OS updates, Defender defs, Store apps, WSL,
-# winget upgrade --all, global npm packages
+# winget upgrade --all, latest Node patch (fnm), global npm packages
 .\update-windows.ps1
 ```
 
 ```bash
-# Ubuntu / WSL: apt upgrade + starship, zoxide, git-delta, lazygit, stern,
-# k9s, kubectx, npm globals, pipx tools. Use --skip-<tool> to opt out.
+# Ubuntu / WSL: apt upgrade + fnm and the latest Node patch, starship, zoxide,
+# git-delta, lazygit, stern, k9s, kubectx, npm globals, pipx tools. Use --skip-<tool> to opt out.
 bash update-ubuntu.sh
 ```
 
@@ -151,17 +151,22 @@ bash audit-ubuntu.sh              # add --apt-extras / --local-bin for noisier c
 
 ### Version pins
 
-`setup-ubuntu.sh` pins the .NET SDK, kubectl and Node major versions. Bumping one
-only affects a **fresh** machine — every `ensure_*` that uses a pin skips when the
-command is already there, so a rerun will not swap your Node major out from under
-you. The audit reports the gap; reconciling it is a separate, explicit step:
+`setup-ubuntu.sh` pins the .NET SDK, kubectl and Node major versions. A rerun
+never swaps what an existing machine runs out from under you; the audit reports
+the gap, and reconciling it is an explicit step:
 
 ```bash
 bash update-ubuntu.sh --pins      # asks before each; --pins-yes to accept all
 ```
 
-.NET is the exception and needs no flag: SDKs install side by side, so a plain
-`bash setup-ubuntu.sh` adds the pinned SDK and leaves the old one in place.
+- **.NET** needs no flag: SDKs install side by side, so a plain
+  `bash setup-ubuntu.sh` adds the pinned SDK and leaves the old one in place.
+- **Node** comes from [fnm](https://github.com/Schniz/fnm), and the pin is only
+  its *default* — a project's `.nvmrc` / `.node-version` wins inside that
+  directory. A setup rerun installs the pinned major alongside; `--pins` makes it
+  the default. npm globals live in `~/.local` (`%APPDATA%\npm` on Windows),
+  shared by every Node version, so they survive both.
+- **kubectl** replaces the installed minor, so only `--pins` moves it.
 
 Each finding prints a two-way reconcile hint: how to **fix** the drift (rerun
 setup, install/uninstall) and, for unexpected apps, how to **adopt** it into

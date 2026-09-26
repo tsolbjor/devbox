@@ -21,7 +21,10 @@ $Config = @{
     UseDelta        = $true    # core.pager + interactive.diffFilter, matching ensure_delta on Ubuntu
   }
   Install7Zip            = $true
-  InstallNode            = $true   # host Node for npm-global tooling (CDK, etc.)
+  InstallNode            = $true   # host Node via fnm (per-project versions; see Ensure-Node)
+  NodeMajorVersion       = 24      # fnm default — keep in step with NODE_MAJOR_VERSION in setup-ubuntu.sh
+  NpmGlobalPrefix        = $null   # npm -g target shared by every Node version; $null = %APPDATA%\npm
+  MigrateLegacyNode      = "ask"   # ask | yes | no — move off the Node MSI / nvm-windows (see Ensure-Node)
   InstallAzureFunctionsCoreTools = $true   # `func` CLI via winget (self-updates on `winget upgrade`)
   InstallAspire          = $true   # `aspire` CLI via winget (Microsoft.Aspire). Self-contained binary —
                                    # a .NET SDK is only needed to build/run an AppHost, not to install it.
@@ -1021,28 +1024,151 @@ function Ensure-ClaudeCode {
   }
 }
 
-function Ensure-NodeAndNcu {
-  # If Node is already on PATH (installed by any means), skip the winget install.
-  # Re-running the MSI over an install winget doesn't track produces a 1603
-  # collision. Update Node later via `winget upgrade` (or reinstall by hand).
-  if (Test-Command "node") {
-    Write-Host "✓ Node.js already installed ($(node --version))" -ForegroundColor Green
-  } else {
-    Install-WingetPackage -Id "OpenJS.NodeJS.LTS"
-  }
+# Node comes from fnm, as on the WSL side (ensure_node): client repos pin their own
+# Node (.nvmrc / .node-version / package.json engines) and fnm switches on `cd`.
+# NodeMajorVersion is only the default. Versions install side by side, so bumping
+# the pin and rerunning adds the new major; moving the default onto it is reported,
+# not done, since every shell outside a pinned project would change underneath you.
+#
+# npm globals go to one prefix shared by every version. fnm gives each version its
+# own, so globals would otherwise vanish on every patch update and inside any
+# project that selects another Node. %APPDATA%\npm is where the Node MSI put them,
+# so globals from an MSI-era install carry straight over.
+function Ensure-Node {
+  param(
+    [Parameter(Mandatory=$true)][int]$MajorVersion,
+    [string]$NpmGlobalPrefix,
+    [ValidateSet("ask", "yes", "no")][string]$MigrateLegacy = "ask"
+  )
+  if (-not $NpmGlobalPrefix) { $NpmGlobalPrefix = Join-Path $env:APPDATA "npm" }
 
-  # Refresh PATH so npm is available in this session after a fresh install
+  Install-WingetPackage -Id "Schniz.fnm"
   $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
               [System.Environment]::GetEnvironmentVariable("Path", "User")
-
-  if (-not (Test-Command "npm")) {
-    Write-Warning "npm not found in PATH after Node.js install. Open a new terminal and run: npm install -g npm-check-updates"
+  if (-not (Test-Command "fnm")) {
+    Write-Warning "fnm not on PATH after install. Open a new terminal and rerun setup."
     return
+  }
+
+  $snippet = @'
+
+# --- devbox: fnm (managed block) ---
+# Node version manager. --use-on-cd switches Node on entering a directory that
+# carries .nvmrc / .node-version / package.json engines; elsewhere the fnm default
+# applies. The bash/zsh counterpart is the "devbox: fnm" block in setup-ubuntu.sh.
+if (Get-Command fnm -ErrorAction SilentlyContinue) {
+  fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression
+}
+# --- end devbox block ---
+'@
+  foreach ($t in Get-PowerShellProfileTargets) {
+    Set-ManagedProfileBlock -Path $t.Profile -Marker "fnm" -Snippet $snippet -Label "fnm"
+  }
+
+  # This session is not a profile-loaded shell, so activate fnm here too.
+  fnm env --shell powershell | Out-String | Invoke-Expression
+
+  if (@(fnm list) -match "^\* v$MajorVersion\.") {
+    Write-Host "✓ node $MajorVersion.x already installed (fnm)" -ForegroundColor Green
+  } else {
+    Write-Host "→ Installing Node.js $MajorVersion.x (fnm)" -ForegroundColor Cyan
+    fnm install $MajorVersion
+    if ($LASTEXITCODE -ne 0) { throw "fnm install $MajorVersion failed (exit $LASTEXITCODE)" }
+  }
+
+  # `fnm install` makes the first version it installs the default; after that the
+  # default only moves when asked.
+  $default = @(fnm list) | ForEach-Object { if ($_ -match '(v\d+\.\d+\.\d+).*\bdefault\b') { $Matches[1] } } | Select-Object -First 1
+  if (-not $default) {
+    Write-Host "→ Setting fnm default to $MajorVersion.x" -ForegroundColor Cyan
+    fnm default $MajorVersion
+  } elseif ($default -like "v$MajorVersion.*") {
+    Write-Host "✓ fnm default is $default" -ForegroundColor Green
+  } else {
+    Write-Warning "fnm default is $default, pin is $MajorVersion.x — move it with: fnm default $MajorVersion"
+  }
+  # Re-evaluate: the multishell link made above predates any default.
+  fnm env --shell powershell | Out-String | Invoke-Expression
+
+  # Read from ~/.npmrc: npm refuses `npm config get prefix` ("protected").
+  $npmrc = Join-Path $env:USERPROFILE ".npmrc"
+  $prefixLine = "prefix=$NpmGlobalPrefix"
+  if ((Test-Path $npmrc) -and (@(Get-Content $npmrc) -contains $prefixLine)) {
+    Write-Host "✓ npm global prefix is $NpmGlobalPrefix" -ForegroundColor Green
+  } else {
+    Write-Host "→ Setting npm global prefix to $NpmGlobalPrefix (~/.npmrc)" -ForegroundColor Cyan
+    New-Item -ItemType Directory -Path $NpmGlobalPrefix -Force | Out-Null
+    npm config set prefix $NpmGlobalPrefix
+  }
+  # On Windows the global bin directory IS the prefix. The MSI put it on the user
+  # PATH; a machine that never had the MSI needs it added.
+  $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+  if (@($userPath -split ';') -contains $NpmGlobalPrefix) {
+    Write-Host "✓ $NpmGlobalPrefix already on user PATH" -ForegroundColor Green
+  } else {
+    Write-Host "→ Adding $NpmGlobalPrefix to user PATH" -ForegroundColor Cyan
+    [System.Environment]::SetEnvironmentVariable("Path", ($userPath.TrimEnd(';') + ";$NpmGlobalPrefix"), "User")
+    $env:Path += ";$NpmGlobalPrefix"
+  }
+
+  # Earlier Node installs fnm supersedes. Both put node.exe on the machine PATH,
+  # which WSL inherits through interop, so a leftover one also leaks into every
+  # Linux shell. Each removal asks first (MigrateLegacy); the audit reports
+  # whatever is left. MSI-era globals need no moving — %APPDATA%\npm is already
+  # the shared prefix — but nvm-windows keeps its globals inside each version.
+  $confirm = {
+    param([string]$Question)
+    switch ($MigrateLegacy) {
+      "yes" { return $true }
+      "no"  { Write-Host "  skipped (MigrateLegacyNode = no)"; return $false }
+    }
+    if ([Console]::IsInputRedirected) {
+      Write-Warning "No terminal to prompt on — skipped (set MigrateLegacyNode = 'yes' to run unattended)"
+      return $false
+    }
+    $reply = Read-Host "  $Question [y/N]"
+    if ($reply -match '^[yY]$') { return $true }
+    Write-Host "  skipped"
+    return $false
+  }
+
+  if ($env:NVM_HOME) {
+    $nvmModules = if ($env:NVM_SYMLINK) { Join-Path $env:NVM_SYMLINK "node_modules" } else { $null }
+    $nvmGlobals = @()
+    if ($nvmModules -and (Test-Path $nvmModules)) {
+      foreach ($d in Get-ChildItem $nvmModules -Directory) {
+        if ($d.Name -in @("npm", "corepack")) { continue }
+        if ($d.Name.StartsWith("@")) {
+          $nvmGlobals += Get-ChildItem $d.FullName -Directory | ForEach-Object { "$($d.Name)/$($_.Name)" }
+        } else { $nvmGlobals += $d.Name }
+      }
+    }
+    Write-Host "→ nvm-windows still installed ($env:NVM_HOME)$(if ($nvmGlobals) { "; its globals: $($nvmGlobals -join ' ')" })" -ForegroundColor Cyan
+    if (& $confirm "Reinstall its globals under fnm and uninstall nvm-windows?") {
+      foreach ($g in $nvmGlobals) {
+        if (-not (Test-Path (Join-Path $NpmGlobalPrefix "node_modules\$g"))) { npm install -g $g }
+      }
+      winget uninstall --id CoreyButler.NVMforWindows -e --silent --disable-interactivity
+      Write-Host "✓ nvm-windows removed — open a new terminal to drop it from PATH" -ForegroundColor Green
+    }
+  }
+
+  if (Test-Path (Join-Path $env:ProgramFiles "nodejs\node.exe")) {
+    $msiIds = @("OpenJS.NodeJS.LTS", "OpenJS.NodeJS") | Where-Object {
+      (winget list --id $_ -e --accept-source-agreements 2>$null | Out-String) -match [regex]::Escape($_)
+    }
+    Write-Host "→ The Node.js MSI is still installed alongside fnm ($env:ProgramFiles\nodejs)" -ForegroundColor Cyan
+    if (-not $msiIds) {
+      Write-Warning "winget does not track it — remove it from Settings → Apps → Installed apps"
+    } elseif (& $confirm "Uninstall it ($($msiIds -join ', '))? Globals in $NpmGlobalPrefix stay.") {
+      foreach ($id in $msiIds) { winget uninstall --id $id -e --silent --disable-interactivity }
+      Write-Host "✓ Node.js MSI removed" -ForegroundColor Green
+    }
   }
 
   # Keep the `npm install -g` call below literal, not built from a variable —
   # audit-windows.ps1 regexes it out as the expected set of npm globals.
-  if (Test-Command "ncu") {
+  if (Test-Path (Join-Path $NpmGlobalPrefix "node_modules\npm-check-updates")) {
     Write-Host "✓ ncu already installed" -ForegroundColor Green
   } else {
     Write-Host "→ Installing ncu (npm-check-updates)" -ForegroundColor Cyan
@@ -1267,7 +1393,7 @@ if ($Config.InstallGit) {
   Install-WingetPackage -Id "Git.Git"
   if ($Config.GitConfig.Configure) { Ensure-WindowsGitConfig -GitConfig $Config.GitConfig }
 }
-if ($Config.InstallNode)            { Ensure-NodeAndNcu }
+if ($Config.InstallNode)            { Ensure-Node -MajorVersion $Config.NodeMajorVersion -NpmGlobalPrefix $Config.NpmGlobalPrefix -MigrateLegacy $Config.MigrateLegacyNode }
 if ($Config.InstallAzureFunctionsCoreTools) { Install-WingetPackage -Id "Microsoft.Azure.FunctionsCoreTools" }
 if ($Config.InstallAspire)           { Install-WingetPackage -Id "Microsoft.Aspire" }
 if ($Config.InstallClaudeCode)      { Ensure-ClaudeCode }

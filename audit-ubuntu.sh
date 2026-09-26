@@ -41,6 +41,10 @@ IGNORE_NPM="${IGNORE_NPM:-}"
 IGNORE_DOTNET="${IGNORE_DOTNET:-}"
 IGNORE_PATTERNS="${IGNORE_PATTERNS:-}"
 
+# Keep in step with setup-ubuntu.sh.
+FNM_DIR="${FNM_DIR:-$HOME/.local/share/fnm}"
+NPM_GLOBAL_PREFIX="${NPM_GLOBAL_PREFIX:-$HOME/.local}"
+
 for arg in "$@"; do
   case "$arg" in
     --apt-extras) APT_EXTRAS=true ;;
@@ -53,6 +57,14 @@ done
 # =========================
 # IMPLEMENTATION
 # =========================
+# Audit the fnm default Node whatever shell this was launched from: the npm
+# extras check and the node pin both read it, and a non-interactive caller may
+# not have sourced the rc block that puts it on PATH.
+if [[ -x "$FNM_DIR/fnm" ]]; then
+  export FNM_DIR PATH="$FNM_DIR:$PATH"
+  eval "$("$FNM_DIR/fnm" env --shell bash)"
+fi
+
 drift=0
 section() { printf '\n=== %s ===\n' "$1"; }
 report_ok()   { printf '✓ %s\n' "$1"; }
@@ -143,6 +155,7 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
   for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     check_rc_marker  "$rc" 'starship init'      'starship init'
     check_rc_marker  "$rc" 'zoxide init'        'zoxide init'
+    check_rc_marker  "$rc" 'devbox: fnm ---'    'fnm init'
     check_rc_marker  "$rc" 'devbox eza aliases' 'eza aliases'
     check_rc_marker  "$rc" 'devbox terminal cwd' 'terminal cwd/title reporting'
     check_rc_present "$rc" 'fzf'                 'fzf integration'
@@ -494,17 +507,82 @@ if [[ "$CHECK_PINS" == "true" ]]; then
   fi
 
   want_node=$(setup_pin NODE_MAJOR_VERSION)
-  if [[ -n "$want_node" ]] && command -v node >/dev/null 2>&1; then
-    have=$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')
-    [[ "$have" == "$want_node" ]] \
-      && report_ok "node ${want_node}.x installed." \
-      || pin_drift "node" "${want_node}.x" "${have:-unknown}.x"
-    repo=$(grep -oE 'node_[0-9]+\.x' /etc/apt/sources.list.d/nodesource.list 2>/dev/null | head -1)
-    if [[ -n "$repo" && "$repo" != "node_${want_node}.x" ]]; then
-      report_drift "node apt repo still serves $repo (pin is node_${want_node}.x)" \
-        "fix: bash update-ubuntu.sh --pins"
+  if [[ -n "$want_node" ]]; then
+    if [[ -x "$FNM_DIR/fnm" ]]; then
+      node_default=""
+      link=$(readlink "$FNM_DIR/aliases/default" 2>/dev/null) && node_default=$(basename "$(dirname "$link")")
+      have=${node_default#v}; have=${have%%.*}
+      [[ "$have" == "$want_node" ]] \
+        && report_ok "node ${want_node}.x is the fnm default ($node_default)." \
+        || pin_drift "node (fnm default)" "${want_node}.x" "${node_default:-unset}"
+    elif grep -q '^INSTALL_NODE="${INSTALL_NODE:-true}"' "$SETUP"; then
+      report_drift "fnm not installed — setup provides Node through it" "fix: bash setup-ubuntu.sh"
     fi
   fi
+fi
+
+# ---------- node toolchain ----------
+# Setup provides Node through fnm, with npm globals in one prefix shared by every
+# Node version. Anything else providing node — the apt package, NodeSource, nvm, a
+# root-owned global prefix from before — is either shadowed by fnm or shadowing it,
+# and never updated either way. The `node` that wins PATH can look fine while an
+# off-pin copy sits behind it, reachable as `nodejs`, /usr/bin/node, or from any
+# shell that skipped the rc block, so each is checked on its own.
+if [[ "$CHECK_CONFIG" == "true" && -x "$FNM_DIR/fnm" ]]; then
+  section "Node toolchain (fnm)"
+  node_clean=true
+
+  apt_node=$(dpkg-query -W -f='${db:Status-Status} ${Version}' nodejs 2>/dev/null || true)
+  if [[ "$apt_node" == installed\ * ]]; then
+    node_clean=false
+    report_drift "apt nodejs ${apt_node#installed } installed alongside fnm" \
+"fix: bash setup-ubuntu.sh   (offers to migrate it; MIGRATE_LEGACY_NODE=yes to skip the prompt)" \
+      "or:  sudo apt-get purge nodejs npm && sudo apt-get autoremove"
+  fi
+  if [[ -f /etc/apt/sources.list.d/nodesource.list ]]; then
+    node_clean=false
+    report_drift "NodeSource apt repo still configured" \
+"fix: bash setup-ubuntu.sh   (offers to migrate it; MIGRATE_LEGACY_NODE=yes to skip the prompt)" \
+      "or:  sudo rm /etc/apt/sources.list.d/nodesource.list /etc/apt/keyrings/nodesource.gpg"
+  fi
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    if [[ -f "$rc" ]] && grep -q 'NVM_DIR' "$rc"; then
+      node_clean=false
+      report_drift "$(basename "$rc") still loads nvm (slows startup; fnm supersedes it)" \
+"fix: bash setup-ubuntu.sh   (offers to migrate it; MIGRATE_LEGACY_NODE=yes to skip the prompt)" \
+        "or:  remove the NVM_DIR lines from $rc, then rm -rf ~/.nvm"
+    fi
+  done
+  for dir in /usr/local/lib/node_modules /usr/lib/node_modules; do
+    [[ "$dir" == "$NPM_GLOBAL_PREFIX/lib/node_modules" ]] && continue
+    leftovers=$(find "$dir" -mindepth 1 -maxdepth 1 ! -name npm ! -name corepack -printf '%f ' 2>/dev/null)
+    if [[ -n "$leftovers" ]]; then
+      node_clean=false
+      report_drift "npm globals left in old root-owned prefix $dir: $leftovers" \
+"fix: bash setup-ubuntu.sh   (offers to reinstall them under fnm and remove these; MIGRATE_LEGACY_NODE=yes to skip the prompt)" \
+        "or:  sudo rm -rf $dir/<pkg> plus its link in ${dir%/lib/node_modules}/bin"
+    fi
+  done
+  if command -v npm >/dev/null 2>&1; then
+    npm_prefix=$(npm prefix -g 2>/dev/null)
+    if [[ "$npm_prefix" != "$NPM_GLOBAL_PREFIX" ]]; then
+      node_clean=false
+      report_drift "npm global prefix is ${npm_prefix:-unset} (expected $NPM_GLOBAL_PREFIX — globals would be per Node version)" \
+        "fix: bash setup-ubuntu.sh"
+    fi
+  fi
+
+  # Several node installs on PATH — the winner depends on rc load order, and
+  # `nodejs` / non-interactive shells may get a different one. Windows copies under
+  # /mnt/ arrive via interop PATH and are ignored; usrmerge makes /bin and /usr/bin
+  # one directory, so dedupe on the resolved path.
+  node_paths=$(type -ap node 2>/dev/null | grep -v '^/mnt/' | while read -r p; do readlink -f "$p"; done | awk '!seen[$0]++' || true)
+  if [[ $(grep -c . <<<"$node_paths") -gt 1 ]]; then
+    node_clean=false
+    report_warn "multiple node installs on PATH (first wins): $(paste -sd' ' <<<"$node_paths")"
+  fi
+
+  [[ "$node_clean" == "true" ]] && report_ok "fnm is the only Node provider; npm globals in $NPM_GLOBAL_PREFIX."
 fi
 
 # ---------- summary ----------

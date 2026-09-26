@@ -9,6 +9,7 @@ $Config = @{
   UpdateWSL          = $true   # wsl --update — WSL kernel/runtime
   UpdatePSModules    = $false  # Update-Module — all installed PowerShell modules (slow, low payoff)
   WingetUpgradeAll   = $true   # winget upgrade --all
+  UpdateNode         = $true   # latest patch of the fnm default Node major (fnm itself rides winget)
   UpdateNpmGlobals   = $true   # npm update -g (in-range updates) if npm is available
 }
 
@@ -104,7 +105,42 @@ function Update-WingetAll {
   Write-Host "✓ winget upgrade complete" -ForegroundColor Green
 }
 
+# Put fnm and its default Node on PATH for this session (see Ensure-Node in setup).
+function Enable-Fnm {
+  if (-not (Test-Command "fnm")) { return $false }
+  fnm env --shell powershell | Out-String | Invoke-Expression
+  return $true
+}
+
+# The newest patch of the default major. The replaced patch is uninstalled: it was
+# only ever the default, and projects asking for the major resolve to the new one.
+# Majors never move here — change NodeMajorVersion in setup-windows.ps1 for that.
+function Update-Node {
+  if (-not (Enable-Fnm)) {
+    Write-Host "✓ fnm not installed, skipping" -ForegroundColor Green
+    return
+  }
+  $current = @(fnm list) | ForEach-Object { if ($_ -match '(v\d+\.\d+\.\d+).*\bdefault\b') { $Matches[1] } } | Select-Object -First 1
+  if (-not $current) {
+    Write-Host "✓ no fnm default set, skipping" -ForegroundColor Green
+    return
+  }
+  $major = ($current.TrimStart('v') -split '\.')[0]
+  $latest = @(fnm ls-remote) | ForEach-Object { if ($_ -match "^(v$major\.\d+\.\d+)") { $Matches[1] } } | Select-Object -Last 1
+  if (-not $latest -or $latest -eq $current) {
+    Write-Host "✓ node $current is the latest $major.x" -ForegroundColor Green
+    return
+  }
+  Write-Host "→ Updating node $current → $latest" -ForegroundColor Cyan
+  fnm install $latest
+  if ($LASTEXITCODE -ne 0) { throw "fnm install $latest failed (exit $LASTEXITCODE)" }
+  fnm default $latest
+  fnm uninstall $current
+  Write-Host "✓ node now $latest (fnm default)" -ForegroundColor Green
+}
+
 function Update-NpmGlobals {
+  [void](Enable-Fnm)
   if (-not (Test-Command "npm")) {
     Write-Host "✓ npm not found, skipping global npm package updates." -ForegroundColor Green
     return
@@ -157,6 +193,7 @@ if ($Config.UpdateStoreApps)  { $totalSteps++ }
 if ($Config.UpdateWSL)        { $totalSteps++ }
 if ($Config.UpdatePSModules)  { $totalSteps++ }
 if ($Config.WingetUpgradeAll) { $totalSteps++ }
+if ($Config.UpdateNode)       { $totalSteps++ }
 if ($Config.UpdateNpmGlobals) { $totalSteps++ }
 $script:totalSteps = $totalSteps
 
@@ -166,6 +203,8 @@ if ($Config.UpdateStoreApps)  { Invoke-Step "Triggering Microsoft Store updates"
 if ($Config.UpdateWSL)        { Invoke-Step "Updating WSL"                      { Update-WSL } }
 if ($Config.UpdatePSModules)  { Invoke-Step "Updating PowerShell modules"      { Update-PSModules } }
 if ($Config.WingetUpgradeAll) { Invoke-Step "Upgrading all winget packages"    { Update-WingetAll } }
+# After winget: that is what updates fnm itself.
+if ($Config.UpdateNode)       { Invoke-Step "Updating Node (fnm)"              { Update-Node } }
 if ($Config.UpdateNpmGlobals) { Invoke-Step "Updating global npm packages"     { Update-NpmGlobals } }
 
 Write-Progress -Activity "devbox update" -Completed

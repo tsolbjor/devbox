@@ -389,6 +389,60 @@ if ($Config.CheckVSCodeExts) {
   }
 }
 
+# ---------- Node (fnm) ----------
+# Setup provides Node through fnm, with npm globals in one prefix shared by every
+# version. Any other node.exe — the MSI, nvm-windows — is shadowed by fnm in a
+# profile-loaded shell but not elsewhere, and it rides the machine PATH into WSL.
+if ($Config.CheckNpmGlobals -and $setup.InstallNode) {
+  Write-Section "Node (fnm)"
+  if (-not (Test-Command "fnm")) {
+    Report-Drift "fnm not installed — setup provides Node through it" @("fix: .\setup-windows.ps1")
+  } else {
+    # Audit the fnm default whatever shell this runs in (and the npm globals
+    # section below reads the same npm).
+    fnm env --shell powershell | Out-String | Invoke-Expression
+    $clean = $true
+    $default = @(fnm list) | ForEach-Object { if ($_ -match '(v\d+\.\d+\.\d+).*\bdefault\b') { $Matches[1] } } | Select-Object -First 1
+    if ($default -like "v$($setup.NodeMajorVersion).*") {
+      Report-Ok "node $($setup.NodeMajorVersion).x is the fnm default ($default)."
+    } else {
+      $clean = $false
+      Report-Drift "node (fnm default): pinned $($setup.NodeMajorVersion).x, default $(if ($default) { $default } else { 'unset' })" @(
+        "fix:  fnm install $($setup.NodeMajorVersion); fnm default $($setup.NodeMajorVersion)",
+        "keep: change NodeMajorVersion in setup-windows.ps1"
+      )
+    }
+
+    $prefix = if ($setup.NpmGlobalPrefix) { $setup.NpmGlobalPrefix } else { Join-Path $env:APPDATA "npm" }
+    $npmrc = Join-Path $env:USERPROFILE ".npmrc"
+    if (-not ((Test-Path $npmrc) -and (@(Get-Content $npmrc) -contains "prefix=$prefix"))) {
+      $clean = $false
+      Report-Drift "npm global prefix is not $prefix (globals would be per Node version)" @("fix: .\setup-windows.ps1")
+    }
+
+    if (Test-Path (Join-Path $env:ProgramFiles "nodejs\node.exe")) {
+      $clean = $false
+      Report-Drift "Node.js MSI installed alongside fnm ($env:ProgramFiles\nodejs)" @(
+        "fix: .\setup-windows.ps1   (offers to uninstall it; MigrateLegacyNode = 'yes' skips the prompt)",
+        "or:  winget uninstall --id OpenJS.NodeJS.LTS   (or OpenJS.NodeJS)"
+      )
+    }
+    if ($env:NVM_HOME) {
+      $clean = $false
+      Report-Drift "nvm-windows installed alongside fnm ($env:NVM_HOME)" @(
+        "fix: .\setup-windows.ps1   (offers to move its globals under fnm and uninstall it)",
+        "or:  winget uninstall --id CoreyButler.NVMforWindows"
+      )
+    }
+    $nodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
+    if ($nodeCmd -and $nodeCmd.Source -notmatch 'fnm_multishells') {
+      $clean = $false
+      Report-Drift "node on PATH is not fnm's: $($nodeCmd.Source)" @("find them: where.exe node")
+    }
+    if ($clean) { Report-Ok "fnm is the only Node provider; npm globals in $prefix." }
+  }
+}
+
 # ---------- npm globals ----------
 if ($Config.CheckNpmGlobals) {
   Write-Section "npm -g globals"
@@ -417,7 +471,7 @@ if ($Config.CheckNpmGlobals) {
     foreach ($g in $extraNpm) {
       Report-Drift "Extra npm global (not in setup): $g" @(
         "remove: npm uninstall -g $g",
-        "adopt:  add 'npm install -g $g' to Ensure-NodeAndNcu in setup-windows.ps1",
+        "adopt:  add 'npm install -g $g' to Ensure-Node in setup-windows.ps1",
         "ignore: .\audit-windows.ps1 -Triage"
       )
     }
@@ -488,6 +542,7 @@ if ($Config.CheckConfigFiles) {
     $blocks = @(
       @{ Enabled = $setup.ConfigurePwshExtras; Marker = "PSReadLine predictions"; Label = "PSReadLine/PSFzf"; Func = "Ensure-PowerShellExperience" }
       @{ Enabled = $setup.ShowCwdInTabTitle;   Marker = "tab title";              Label = "tab-title";        Func = "Ensure-ShellTabTitle" }
+      @{ Enabled = $setup.InstallNode;         Marker = "fnm";                    Label = "fnm";              Func = "Ensure-Node" }
     )
     foreach ($b in $blocks) {
       if (-not $b.Enabled) { continue }

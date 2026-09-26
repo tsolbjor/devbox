@@ -77,15 +77,20 @@ SHELL_HISTORY_SIZE="${SHELL_HISTORY_SIZE:-200000}"          # HISTSIZE/SAVEHIST 
 # at all. Same problem, same fix as PSReadLine's InlinePrediction colour on Windows.
 ZSH_AUTOSUGGEST_COLOR="${ZSH_AUTOSUGGEST_COLOR:-fg=#7f849c}"
 
-INSTALL_NODE="${INSTALL_NODE:-true}"
-NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-24}"   # Active LTS (22 reached EOL Sep 2026);
+INSTALL_NODE="${INSTALL_NODE:-true}"             # Node via fnm (per-project versions; see ensure_node)
+NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-24}"   # fnm default. Active LTS (22 reached EOL Sep 2026);
                                                  # https://nodejs.org/en/about/previous-releases
+FNM_DIR="${FNM_DIR:-$HOME/.local/share/fnm}"     # fnm binary + every Node version it installs
+NPM_GLOBAL_PREFIX="${NPM_GLOBAL_PREFIX:-$HOME/.local}"   # npm -g target shared by all Node versions;
+                                                         # binaries land in $NPM_GLOBAL_PREFIX/bin
+MIGRATE_LEGACY_NODE="${MIGRATE_LEGACY_NODE:-ask}"      # ask | yes | no — move off apt nodejs / NodeSource / nvm
+                                                         # and old root-owned npm globals (see migrate_legacy_node)
 
 # Agentic CLIs.
 # Claude Code comes from its own installer (ensure_claude_code) and needs no Node.
 # Codex is an npm global installed by ensure_node (so it needs INSTALL_NODE): it
-# lands in the root-owned global prefix like ncu does, so its own in-place
-# self-update is disabled — `update-ubuntu.sh` bumps it with the other globals.
+# lands in NPM_GLOBAL_PREFIX like ncu does, and `update-ubuntu.sh` bumps it with
+# the other globals.
 INSTALL_CLAUDE_CODE="${INSTALL_CLAUDE_CODE:-true}"   # `claude` — native install, self-updating
 INSTALL_CODEX="${INSTALL_CODEX:-true}"               # `codex`  — @openai/codex
 CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-true}"   # set false on native Linux (not WSL)
@@ -395,42 +400,228 @@ ensure_kubelogin() {
   echo "✓ kubelogin ${version} installed"
 }
 
-ensure_node() {
-  if ensure_command node; then
-    echo "✓ node already installed ($(node --version))"
-  else
-    echo "→ Installing Node.js ${NODE_MAJOR_VERSION}.x (NodeSource)"
-    if [[ ! -f /etc/apt/keyrings/nodesource.gpg ]]; then
-      sudo mkdir -p /etc/apt/keyrings
-      curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-        | sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+# Node comes from fnm, not apt. Client repos pin their own Node (.nvmrc,
+# .node-version, package.json engines) and fnm switches on `cd`, without the
+# shell-startup cost of sourcing nvm.sh. NODE_MAJOR_VERSION is only the *default*.
+#
+# Keyed on the pinned major rather than on `node` existing, like ensure_dotnet:
+# fnm installs versions side by side, so bumping the pin and rerunning adds the
+# new major and removes nothing. Moving the default onto it is a decision, not a
+# refresh, so a rerun only reports that; `update-ubuntu.sh --pins` asks and moves it.
+#
+# npm globals go to NPM_GLOBAL_PREFIX rather than the active Node's own prefix.
+# fnm gives every version its own, so globals would otherwise vanish on each patch
+# update and inside any project whose .nvmrc selects another Node. It is
+# user-owned, so no sudo, and the default (~/.local) drops the binaries into
+# ~/.local/bin, which is already on PATH.
+
+# Put fnm and its default Node on PATH for this (non-interactive) script. The rc
+# block does the same for interactive shells.
+activate_fnm() {
+  [[ -x "$FNM_DIR/fnm" ]] || return 1
+  export FNM_DIR
+  case ":$PATH:" in *":$FNM_DIR:"*) ;; *) export PATH="$FNM_DIR:$PATH" ;; esac
+  eval "$(fnm env --shell bash)"
+}
+
+# The version fnm's `default` alias points at (e.g. v24.21.0), or nothing.
+fnm_default_version() {
+  local link
+  link="$(readlink "$FNM_DIR/aliases/default" 2>/dev/null)" || return 0
+  basename "$(dirname "$link")"
+}
+
+# Looked up on disk, not through `npm root -g`: npm masks path segments that look
+# like tokens (a UUID in the path prints as ***), which breaks any comparison.
+npm_global_installed() {
+  [[ -d "$NPM_GLOBAL_PREFIX/lib/node_modules/$1" ]]
+}
+
+ensure_fnm_shell_init() {
+  local body rc shell fnm_dir="$FNM_DIR"
+  # Written as $HOME/... when under the home directory, so the block reads the
+  # same on every machine and the audit can compare it.
+  [[ "$fnm_dir" == "$HOME/"* ]] && fnm_dir="\$HOME/${fnm_dir#"$HOME"/}"
+  body="$(mktemp)"
+  for pair in ".bashrc:bash" ".zshrc:zsh"; do
+    rc="$HOME/${pair%%:*}"; shell="${pair##*:}"
+    [[ -f "$rc" ]] || continue
+    cat > "$body" <<FNMRC
+# Node version manager. --use-on-cd switches Node on entering a directory that
+# carries .nvmrc / .node-version / package.json engines; elsewhere the fnm
+# default applies. npm globals live in one prefix shared by every version (~/.npmrc).
+if [ -x "$fnm_dir/fnm" ]; then
+  export FNM_DIR="$fnm_dir"
+  export PATH="\$FNM_DIR:\$PATH"
+  eval "\$(fnm env --use-on-cd --shell $shell)"
+fi
+FNMRC
+    if ! set_managed_block "$rc" "fnm" "$body" "fnm"; then
+      echo "→ Adding fnm init to $(basename "$rc")"
+      wrap_managed_block "fnm" "$body" >> "$rc"
     fi
-    if [[ ! -f /etc/apt/sources.list.d/nodesource.list ]]; then
-      echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR_VERSION}.x nodistro main" \
-        | sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
-      sudo apt-get update -y
+  done
+  rm -f "$body"
+}
+
+# Earlier Node installs fnm supersedes: apt's nodejs, NodeSource, nvm, and globals
+# in the root-owned prefix those used. Each is left alone unless you say so —
+# purging apt's nodejs takes its reverse dependencies with it, and the nvm lines
+# are your own rc edits — so every step asks first (MIGRATE_LEGACY_NODE: ask |
+# yes | no). audit-ubuntu.sh reports whatever is left as drift.
+confirm_migrate() {
+  local reply
+  case "$MIGRATE_LEGACY_NODE" in
+    yes) return 0 ;;
+    no)  echo "  skipped (MIGRATE_LEGACY_NODE=no)"; return 1 ;;
+  esac
+  if [[ ! -t 0 ]]; then
+    echo "  ⚠ no terminal to prompt on — skipped (MIGRATE_LEGACY_NODE=yes to run unattended)"
+    return 1
+  fi
+  read -r -p "  $1 [y/N] " reply || return 1
+  [[ "$reply" == "y" || "$reply" == "Y" ]] || { echo "  skipped"; return 1; }
+}
+
+# Package names installed in a node_modules dir, scoped ones as @scope/name.
+list_global_pkgs() {
+  local dir="$1" entry sub
+  for entry in "$dir"/*; do
+    [[ -d "$entry" ]] || continue
+    case "${entry##*/}" in
+      npm|corepack) ;;
+      @*) for sub in "$entry"/*; do [[ -d "$sub" ]] && echo "${entry##*/}/${sub##*/}"; done ;;
+      *)  echo "${entry##*/}" ;;
+    esac
+  done
+}
+
+migrate_legacy_node() {
+  local dir bin pkgs pkg rc apt_pkgs n
+
+  # 1. Globals first, while their old Node still exists to have installed them:
+  #    reinstall each into NPM_GLOBAL_PREFIX under fnm, then drop the old copy and
+  #    its bin links. Nothing is lost — anything you had, you keep.
+  for dir in /usr/local/lib/node_modules /usr/lib/node_modules; do
+    [[ "$dir" == "$NPM_GLOBAL_PREFIX/lib/node_modules" ]] && continue
+    mapfile -t pkgs < <(list_global_pkgs "$dir")
+    [[ ${#pkgs[@]} -gt 0 ]] || continue
+    bin="${dir%/lib/node_modules}/bin"
+    echo "→ npm globals in the old root-owned prefix $dir: ${pkgs[*]}"
+    if confirm_migrate "Reinstall them into $NPM_GLOBAL_PREFIX and remove the old copies?"; then
+      for pkg in "${pkgs[@]}"; do
+        npm_global_installed "$pkg" || npm install -g "$pkg"
+        sudo find "$bin" -maxdepth 1 -type l -lname "*node_modules/$pkg/*" -delete
+        sudo rm -rf "${dir:?}/$pkg"
+      done
+      sudo find "$dir" -mindepth 1 -maxdepth 1 -type d -name '@*' -empty -delete
+      hash -r
+      echo "✓ globals moved to $NPM_GLOBAL_PREFIX"
     fi
-    sudo apt-get install -y nodejs
-    echo "✓ node installed ($(node --version))"
+  done
+
+  # 2. nvm: its rc lines (backed up first) and its directory. fnm's block already
+  #    wins PATH, so this only buys back the shell-startup time.
+  local nvm_rcs=()
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    [[ -f "$rc" ]] && grep -q 'NVM_DIR' "$rc" && nvm_rcs+=("$rc")
+  done
+  if [[ ${#nvm_rcs[@]} -gt 0 || -d "$HOME/.nvm" ]]; then
+    echo "→ nvm still installed${nvm_rcs[*]:+ and loaded from ${nvm_rcs[*]##*/}}"
+    if confirm_migrate "Remove the NVM_DIR lines and ~/.nvm?"; then
+      for rc in "${nvm_rcs[@]}"; do
+        cp "$rc" "$rc.devbox-nvm.bak"
+        sed -i '/NVM_DIR/d' "$rc"
+        echo "✓ nvm lines removed from $(basename "$rc") (backup: $(basename "$rc").devbox-nvm.bak)"
+      done
+      rm -rf "$HOME/.nvm"
+      echo "✓ ~/.nvm removed — open a new shell to drop it from PATH"
+    fi
   fi
 
+  # 3. apt's nodejs (Ubuntu archive or NodeSource) and the NodeSource source.
+  #    Purging nodejs also purges what depends on it (npm, apt builds of eslint,
+  #    webpack, …), so the prompt states how many packages go.
+  mapfile -t apt_pkgs < <(dpkg-query -W -f='${db:Status-Status} ${Package}\n' nodejs npm nodejs-doc libnode-dev 2>/dev/null \
+    | awk '$1 == "installed" {print $2}')
+  if [[ ${#apt_pkgs[@]} -gt 0 || -f /etc/apt/sources.list.d/nodesource.list ]]; then
+    n=""
+    # grep -c prints 0 itself on no match; `|| true` only stops pipefail aborting.
+    [[ ${#apt_pkgs[@]} -gt 0 ]] && n=$(apt-get -s purge "${apt_pkgs[@]}" 2>/dev/null | grep -c '^Purg' || true)
+    echo "→ apt Node still installed: ${apt_pkgs[*]:-(none)}${n:+ — purging removes $n package(s)}$([[ -f /etc/apt/sources.list.d/nodesource.list ]] && echo ', plus the NodeSource repo')"
+    if confirm_migrate "Purge them?"; then
+      [[ ${#apt_pkgs[@]} -gt 0 ]] && sudo apt-get purge -y "${apt_pkgs[@]}"
+      sudo rm -f /etc/apt/sources.list.d/nodesource.list /etc/apt/keyrings/nodesource.gpg
+      hash -r
+      echo "✓ apt Node removed (leftover libraries: sudo apt-get autoremove)"
+    fi
+  fi
+}
+
+ensure_node() {
+  if activate_fnm; then
+    echo "✓ fnm already installed ($(fnm --version))"
+  else
+    echo "→ Installing fnm"
+    # --skip-shell: the installer would append an unmanaged block to one rc file;
+    # ensure_fnm_shell_init writes a managed one to both.
+    curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir "$FNM_DIR" --skip-shell
+    activate_fnm
+    echo "✓ fnm installed ($(fnm --version))"
+  fi
+  ensure_fnm_shell_init
+
+  if fnm list 2>/dev/null | grep -qE "^\* v${NODE_MAJOR_VERSION}\."; then
+    echo "✓ node ${NODE_MAJOR_VERSION}.x already installed (fnm)"
+  else
+    echo "→ Installing Node.js ${NODE_MAJOR_VERSION}.x (fnm)"
+    fnm install "$NODE_MAJOR_VERSION"
+  fi
+
+  local default
+  default="$(fnm_default_version)"
+  if [[ -z "$default" ]]; then
+    echo "→ Setting fnm default to ${NODE_MAJOR_VERSION}.x"
+    fnm default "$NODE_MAJOR_VERSION"
+  elif [[ "$default" == "v${NODE_MAJOR_VERSION}."* ]]; then
+    echo "✓ fnm default is $default"
+  else
+    echo "⚠ fnm default is $default, pin is ${NODE_MAJOR_VERSION}.x — move it with: bash update-ubuntu.sh --pins"
+  fi
+  # Re-evaluate: the multishell link fnm env made above predates any default.
+  activate_fnm
+
+  # Read from ~/.npmrc: npm refuses `npm config get prefix` ("protected"), and
+  # `npm prefix -g` output is masked as npm_global_installed explains.
+  if grep -qxF "prefix=$NPM_GLOBAL_PREFIX" "$HOME/.npmrc" 2>/dev/null; then
+    echo "✓ npm global prefix is $NPM_GLOBAL_PREFIX"
+  else
+    echo "→ Setting npm global prefix to $NPM_GLOBAL_PREFIX (~/.npmrc)"
+    mkdir -p "$NPM_GLOBAL_PREFIX"
+    npm config set prefix "$NPM_GLOBAL_PREFIX"
+  fi
+
+  migrate_legacy_node
+
+  # Checked in the prefix rather than on PATH: a copy left in an old root-owned
+  # prefix would otherwise count as installed here.
   # The literal `npm install -g <package>` calls below are what audit-ubuntu.sh
   # greps out as the expected set of globals — keep them literal, not built from a
   # variable, or the audit reports every global as unexpected drift.
-  if ensure_command ncu; then
+  if npm_global_installed npm-check-updates; then
     echo "✓ ncu already installed"
   else
     echo "→ Installing ncu (npm-check-updates)"
-    sudo npm install -g npm-check-updates
+    npm install -g npm-check-updates
     echo "✓ ncu installed"
   fi
 
   if [[ "$INSTALL_CODEX" == "true" ]]; then
-    if ensure_command codex; then
+    if npm_global_installed @openai/codex; then
       echo "✓ Codex already installed"
     else
       echo "→ Installing Codex (@openai/codex)"
-      sudo npm install -g @openai/codex
+      npm install -g @openai/codex
       echo "✓ Codex installed — run 'codex' to sign in"
     fi
   fi
@@ -438,10 +629,9 @@ ensure_node() {
 
 # Claude Code, from Anthropic's installer rather than as an npm global. The native
 # install lands in ~/.local/bin and updates itself in the background, which is the
-# upstream-recommended path; the npm route cannot self-update here, because node
-# comes from apt and its global prefix is root-owned (the one case where Claude
-# Code switches its own updater off). No Node dependency either — npm ships the
-# same native binary, it just wraps it in a package.
+# upstream-recommended path, and it does not tie `claude` to whichever Node fnm
+# has active. No Node dependency either — npm ships the same native binary, it
+# just wraps it in a package.
 ensure_claude_code() {
   # Migrate machines set up before this switch: two installs on one PATH means the
   # winner is whichever directory comes first, and only the native one can update
@@ -452,7 +642,7 @@ ensure_claude_code() {
   ensure_command npm && npm_globals="$(npm ls -g --depth=0 --parseable 2>/dev/null || true)"
   if [[ -n "$npm_globals" ]] && grep -q 'claude-code$' <<< "$npm_globals"; then
     echo "→ Removing the npm-global Claude Code (superseded by the native install)"
-    sudo npm uninstall -g @anthropic-ai/claude-code
+    npm uninstall -g @anthropic-ai/claude-code
     hash -r 2>/dev/null || true
   fi
 
@@ -946,8 +1136,9 @@ TERMCWD
 # Keyed on the pinned SDK, not on "is dotnet present at all". .NET SDKs install
 # side by side, so bumping DOTNET_SDK_VERSION and rerunning adds the new one and
 # leaves the old in place — nothing is removed and no project stops building.
-# (node and kubectl cannot work this way: their pins replace the major version,
-# so those stay guarded and are handled by `update-ubuntu.sh --pins`.)
+# (ensure_node does the same for Node majors under fnm. kubectl cannot: its pin
+# replaces the installed minor, so it stays guarded and is handled by
+# `update-ubuntu.sh --pins`.)
 ensure_dotnet() {
   if ensure_command dotnet && dotnet --list-sdks 2>/dev/null | grep -q "^${DOTNET_SDK_VERSION}\."; then
     echo "✓ dotnet SDK ${DOTNET_SDK_VERSION} already installed ($(dotnet --version 2>/dev/null))"
@@ -1329,7 +1520,7 @@ if [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]]; then
 fi
 
 if [[ "$INSTALL_NODE" == "true" ]]; then
-  log "Installing Node.js and npm-global CLIs"
+  log "Installing fnm, Node.js and npm-global CLIs"
   ensure_node
 fi
 
