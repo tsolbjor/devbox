@@ -11,6 +11,7 @@ UPDATE_ZOXIDE="${UPDATE_ZOXIDE:-true}"
 UPDATE_DELTA="${UPDATE_DELTA:-true}"
 UPDATE_LAZYGIT="${UPDATE_LAZYGIT:-true}"
 UPDATE_STERN="${UPDATE_STERN:-true}"
+UPDATE_GLOW="${UPDATE_GLOW:-true}"
 UPDATE_ASPIRE="${UPDATE_ASPIRE:-true}"               # aspire CLI (re-runs the aspire.dev installer)
 UPDATE_K9S="${UPDATE_K9S:-true}"
 UPDATE_KUBECTX="${UPDATE_KUBECTX:-true}"
@@ -47,6 +48,7 @@ Usage: update-ubuntu.sh [options]
   --skip-delta         Skip git-delta update
   --skip-lazygit       Skip lazygit update
   --skip-stern         Skip stern update
+  --skip-glow          Skip glow update
   --skip-aspire        Skip Aspire CLI update
   --skip-k9s           Skip k9s update
   --skip-kubectx       Skip kubectx/kubens update
@@ -72,6 +74,7 @@ while [[ $# -gt 0 ]]; do
     --skip-delta)        UPDATE_DELTA=false ;;
     --skip-lazygit)      UPDATE_LAZYGIT=false ;;
     --skip-stern)        UPDATE_STERN=false ;;
+    --skip-glow)         UPDATE_GLOW=false ;;
     --skip-aspire)       UPDATE_ASPIRE=false ;;
     --skip-k9s)          UPDATE_K9S=false ;;
     --skip-kubectx)      UPDATE_KUBECTX=false ;;
@@ -238,6 +241,27 @@ update_stern() {
   curl -fsSL "https://github.com/stern/stern/releases/download/${latest}/stern_${num}_linux_${dpkg_arch}.tar.gz" \
     | sudo tar -xz -C /usr/local/bin stern
   echo "✓ stern updated to $num"
+}
+
+update_glow() {
+  if ! ensure_command glow; then
+    echo "✓ glow not installed, skipping"
+    return
+  fi
+  local current latest num arch dir
+  current=$(glow --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  latest=$(get_github_latest_tag "charmbracelet/glow")   # vX.Y.Z
+  num="${latest#v}"
+  if [[ "$current" == "$num" ]]; then
+    echo "✓ glow already at latest ($current)"
+    return
+  fi
+  echo "→ Updating glow: $current → $num"
+  arch=$([ "$(dpkg --print-architecture)" = "amd64" ] && echo "x86_64" || echo "arm64")
+  dir="glow_${num}_Linux_${arch}"
+  curl -fsSL "https://github.com/charmbracelet/glow/releases/download/${latest}/${dir}.tar.gz" \
+    | sudo tar -xz --strip-components=1 -C /usr/local/bin "${dir}/glow"
+  echo "✓ glow updated to $num"
 }
 
 # The Aspire CLI has no self-update: `aspire update` updates the *project's*
@@ -569,6 +593,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_DELTA"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_LAZYGIT"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_STERN"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_GLOW"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_ASPIRE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_K9S"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_KUBECTX"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -587,6 +612,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_DELTA"       == "true" ]] && run_step "Updating git-delta"         --skip-delta        update_delta
 [[ "$UPDATE_LAZYGIT"     == "true" ]] && run_step "Updating lazygit"           --skip-lazygit      update_lazygit
 [[ "$UPDATE_STERN"       == "true" ]] && run_step "Updating stern"             --skip-stern        update_stern
+[[ "$UPDATE_GLOW"        == "true" ]] && run_step "Updating glow"              --skip-glow         update_glow
 [[ "$UPDATE_ASPIRE"      == "true" ]] && run_step "Updating Aspire CLI"        --skip-aspire       update_aspire
 [[ "$UPDATE_K9S"         == "true" ]] && run_step "Updating k9s"               --skip-k9s          update_k9s
 [[ "$UPDATE_KUBECTX"     == "true" ]] && run_step "Updating kubectx/kubens"    --skip-kubectx      update_kubectx

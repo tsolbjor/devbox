@@ -64,6 +64,7 @@ $Config = @{
     "jqlang.jq",                 # jq
     "dandavison.delta",          # git-delta — wired into git by GitConfig.UseDelta
     "JesseDuffield.lazygit",     # lazygit
+    "charmbracelet.glow",        # glow — rendered markdown in the terminal
     "GitHub.cli"                 # gh
   )
 

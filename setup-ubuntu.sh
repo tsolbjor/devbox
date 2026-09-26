@@ -53,6 +53,7 @@ INSTALL_EZA="${INSTALL_EZA:-true}"                  # modern ls with icons
 INSTALL_DELTA="${INSTALL_DELTA:-true}"              # git-delta: nicer diffs (wires git core.pager)
 INSTALL_LAZYGIT="${INSTALL_LAZYGIT:-true}"          # git TUI
 INSTALL_STERN="${INSTALL_STERN:-true}"              # multi-pod Kubernetes log tailing
+INSTALL_GLOW="${INSTALL_GLOW:-true}"                # rendered markdown in the terminal
 INSTALL_ZSH_PLUGINS="${INSTALL_ZSH_PLUGINS:-true}"  # zsh-autosuggestions + zsh-syntax-highlighting
 INSTALL_OMZ="${INSTALL_OMZ:-true}"                  # oh-my-zsh: framework only (completion, git aliases,
                                                     # tab-title support). Starship stays the prompt, so
@@ -783,6 +784,23 @@ ensure_stern() {
   echo "✓ stern ${version} installed"
 }
 
+ensure_glow() {
+  if ensure_command glow; then
+    echo "✓ glow already installed"
+    return
+  fi
+  echo "→ Installing glow (latest)"
+  local version num dpkg_arch arch dir
+  version=$(gh_latest_tag charmbracelet/glow)   # e.g. v3.0.0
+  num="${version#v}"
+  dpkg_arch=$(dpkg --print-architecture)
+  arch=$([ "$dpkg_arch" = "amd64" ] && echo "x86_64" || echo "arm64")
+  dir="glow_${num}_Linux_${arch}"   # the tarball wraps the binary in this directory
+  curl -fsSL "https://github.com/charmbracelet/glow/releases/download/${version}/${dir}.tar.gz" \
+    | sudo tar -xz --strip-components=1 -C /usr/local/bin "${dir}/glow"
+  echo "✓ glow ${version} installed"
+}
+
 # oh-my-zsh is the zsh *framework* (completion defaults, git aliases, the
 # termsupport hooks that title the tab) — not the prompt. Starship renders the
 # prompt, and its init runs after omz, so any ZSH_THEME is built and thrown away:
@@ -1336,6 +1354,7 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
 [[ "$INSTALL_DELTA"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_LAZYGIT"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_STERN"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_GLOW"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_OMZ"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ZSH_PLUGINS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -1501,6 +1520,11 @@ fi
 if [[ "$INSTALL_STERN" == "true" ]]; then
   log "Installing stern"
   ensure_stern
+fi
+
+if [[ "$INSTALL_GLOW" == "true" ]]; then
+  log "Installing glow"
+  ensure_glow
 fi
 
 if [[ "$INSTALL_OMZ" == "true" ]]; then

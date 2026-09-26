@@ -48,7 +48,7 @@ Installs and configures:
 | Category | What gets set up |
 |---|---|
 | Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip, Node.js via fnm (host), Azure Functions Core Tools, Aspire CLI |
-| CLI tools | ripgrep, bat, fd, jq, git-delta, lazygit, GitHub CLI — the same basics `setup-ubuntu.sh` installs, so pwsh matches the WSL shell |
+| CLI tools | ripgrep, bat, fd, jq, git-delta, lazygit, glow, GitHub CLI — the same basics `setup-ubuntu.sh` installs, so pwsh matches the WSL shell |
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (winget) |
 | Fonts | Cascadia Code, JetBrains Mono Nerd Font |
 | Cloud CLIs | Azure CLI, Azure Developer CLI (`azd`), kubelogin (Entra auth for AKS) — add AWS CLI / Google Cloud SDK via `CloudCLIs` |
@@ -86,7 +86,7 @@ Installs and configures:
 |---|---|
 | Shell | zsh (set as default), Starship, fzf, zoxide, zsh-autosuggestions + zsh-syntax-highlighting |
 | Shell UX | 200 000-line history for bash and zsh (flushed per command), inline suggestions in a readable colour, PSReadLine-style accept keys (`→`, `Ctrl+→`, `Tab`), `Ctrl+R` history picker |
-| Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, wget, zip, git-delta, lazygit, GitHub CLI, Node.js via fnm |
+| Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, wget, zip, git-delta, lazygit, glow, GitHub CLI, Node.js via fnm |
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (npm global) |
 | Languages | .NET SDK (10 LTS), Aspire CLI, `dotnet outdated` (NuGet's `ncu`), Python (venv/pip/pipx/uv) |
 | Azure | Azure Developer CLI (`azd`) — provisions and deploys an Aspire AppHost |
@@ -121,7 +121,7 @@ nothing new, only upgrade what's there. Safe to rerun anytime.
 
 ```bash
 # Ubuntu / WSL: apt upgrade + fnm and the latest Node patch, starship, zoxide,
-# git-delta, lazygit, stern, k9s, kubectx, npm globals, pipx tools. Use --skip-<tool> to opt out.
+# git-delta, lazygit, stern, glow, k9s, kubectx, npm globals, pipx tools. Use --skip-<tool> to opt out.
 bash update-ubuntu.sh
 ```
 
