@@ -169,7 +169,7 @@ In the picker: type to filter, `Tab` to multi-select, `Enter` to accept, `Esc` t
 
 ### eza — modern `ls`
 
-Setup wires these aliases into `.bashrc`/`.zshrc` for you:
+Setup defines these aliases for you (in `~/.config/devbox/<shell>rc`):
 
 | Alias | Expands to |
 |---|---|
@@ -251,10 +251,11 @@ flush after every command, so a killed terminal loses nothing. Out of the box zs
 keeps 1000 and oh-my-zsh raises `SAVEHIST` to only 10 000 — which silently
 *truncates* `~/.zsh_history` on every write once you pass it.
 
-The zsh settings are load-order sensitive and setup places them accordingly:
-the `zsh history` block must sit **above** the oh-my-zsh source line (omz reassigns
-`HISTSIZE`/`SAVEHIST`), and the `zsh history keys` block must sit **below** the fzf
-integration (fzf binds `Tab`). The audit checks position, not just presence.
+The zsh settings are load-order sensitive — the history sizes must come after
+oh-my-zsh (which reassigns them), the Tab binding after fzf (which binds it too) —
+so they live in one generated file, `~/.config/devbox/zshrc`, where setup fixes the
+order. Anything you set in `~/.zshrc` *below* the devbox loader wins; the audit
+starts a real zsh to check the values you actually end up with.
 
 ---
 
@@ -276,7 +277,8 @@ integration (fzf binds `Tab`). The audit checks position, not just presence.
 | WezTerm | `~/.wezterm.lua` (Windows home) | **Managed** — rewritten by `setup-windows.ps1`. For permanent changes edit the `WezTermConfig` block in that script, or accept that reruns overwrite hand edits. |
 | Starship | `~/.config/starship.toml` (Windows **and** WSL, separately) | Never overwritten once it exists. |
 | PowerShell profiles | `Documents\PowerShell\Microsoft.PowerShell_profile.ps1` (PS7) and `…\WindowsPowerShell\…` (PS5) | Starship init + the PSReadLine/PSFzf block live here. |
-| Shell rc (WSL) | `~/.bashrc`, `~/.zshrc` | Starship, zoxide, fzf, and zsh plugin `source` lines are appended here. The history/prediction settings live in `# --- devbox: … ---` blocks that setup rewrites **in place** — edit `ensure_shell_history` in `setup-ubuntu.sh` and rerun, or your changes are overwritten. |
+| Shell config (WSL) | `~/.config/devbox/zshrc`, `~/.config/devbox/bashrc` | **Managed** — regenerated on every `setup-ubuntu.sh` run: starship, zoxide, fzf, oh-my-zsh and its plugins, fnm, history/prediction settings, eza aliases. Don't edit it; change the `render_devbox_*` functions in `setup-ubuntu.sh`, or override in your rc file. |
+| Shell rc (WSL) | `~/.bashrc`, `~/.zshrc` | **Yours.** Setup only keeps a `# --- devbox: loader ---` block here that sources the file above: lines above the block run before it, lines below run after it and win. Moving a machine from the old layout keeps a one-time `*.pre-devbox-config.bak`. |
 
 To reapply the whole setup, rerun `setup-windows.ps1` (as Admin) / `bash setup-ubuntu.sh` —
 both are idempotent. To keep tools current, run `update-windows.ps1` / `bash update-ubuntu.sh`.

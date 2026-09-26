@@ -84,7 +84,7 @@ Installs and configures:
 
 | Category | What gets set up |
 |---|---|
-| Shell | zsh (set as default), Starship, fzf, zoxide, zsh-autosuggestions + zsh-syntax-highlighting |
+| Shell | zsh (set as default), Starship, fzf, zoxide, zsh-autosuggestions + zsh-syntax-highlighting — all configured in a generated `~/.config/devbox/<shell>rc`; your `~/.zshrc`/`~/.bashrc` only gets one loader block, and stays yours |
 | Shell UX | 200 000-line history for bash and zsh (flushed per command), inline suggestions in a readable colour, PSReadLine-style accept keys (`→`, `Ctrl+→`, `Tab`), `Ctrl+R` history picker |
 | Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, wget, zip, git-delta, lazygit, glow, GitHub CLI, Node.js via fnm |
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (npm global) |

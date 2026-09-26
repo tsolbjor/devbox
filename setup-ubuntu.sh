@@ -340,55 +340,6 @@ ensure_k9s() {
   echo "✓ k9s ${version} installed"
 }
 
-# An rc line that loads fzf: `eval "$(fzf --zsh)"`, `source .../key-bindings.zsh`,
-# or omz's own fzf plugin. audit-ubuntu.sh uses the same expression.
-FZF_LOAD_RE='^[[:space:]]*(source|eval|\.)[^#]*fzf|^plugins=\(([^)]*[[:space:]])?fzf([[:space:]]|\))'
-
-ensure_fzf_shell_integration() {
-  ensure_command fzf || { echo "⚠ fzf not installed; skipping shell integration"; return; }
-
-  # fzf 0.48+ generates integration inline (`fzf --bash` / `--zsh`), which is
-  # version-proof. Older packaged fzf (e.g. Ubuntu 24.04 ships 0.44) has no such
-  # flag, so fall back to sourcing the packaged example scripts, whose location
-  # has moved across Debian/Ubuntu releases — hence multiple candidate paths.
-  local supports_flag=false
-  fzf --bash >/dev/null 2>&1 && supports_flag=true
-
-  for pair in ".bashrc:bash" ".zshrc:zsh"; do
-    local rc="$HOME/${pair%%:*}"
-    local shell="${pair##*:}"
-    [[ -f "$rc" ]] || continue
-    # A line that *loads* fzf, not one that merely mentions it: the "zsh history
-    # keys" block names fzf-completion / FZF_CTRL_R_OPTS without loading anything,
-    # so a bare `grep fzf` would call a machine without the integration wired.
-    if grep -qE "$FZF_LOAD_RE" "$rc"; then
-      echo "✓ fzf already in $(basename "$rc")"
-      continue
-    fi
-
-    if [[ "$supports_flag" == "true" ]]; then
-      echo "→ Adding fzf integration to $(basename "$rc") (fzf --${shell})"
-      printf '\neval "$(fzf --%s)"\n' "$shell" >> "$rc"
-      continue
-    fi
-
-    local binding="" completion=""
-    for dir in /usr/share/doc/fzf/examples /usr/share/fzf /usr/share/fzf/shell; do
-      if [[ -f "$dir/key-bindings.${shell}" ]]; then
-        binding="$dir/key-bindings.${shell}"
-        [[ -f "$dir/completion.${shell}" ]] && completion="$dir/completion.${shell}"
-        break
-      fi
-    done
-    if [[ -z "$binding" ]]; then
-      echo "⚠ fzf too old for 'fzf --${shell}' and no example scripts found; skipping $(basename "$rc")"
-      continue
-    fi
-    echo "→ Adding fzf key bindings to $(basename "$rc")"
-    printf '\nsource %s\n' "$binding" >> "$rc"
-    [[ -n "$completion" ]] && printf 'source %s\n' "$completion" >> "$rc"
-  done
-}
 
 # Set `key = value` under [section] of an INI file IN PLACE, leaving every other
 # line alone: an existing key is rewritten where it sits, a missing one is added at
@@ -512,8 +463,8 @@ ensure_kubelogin() {
 # user-owned, so no sudo, and the default (~/.local) drops the binaries into
 # ~/.local/bin, which is already on PATH.
 
-# Put fnm and its default Node on PATH for this (non-interactive) script. The rc
-# block does the same for interactive shells.
+# Put fnm and its default Node on PATH for this (non-interactive) script.
+# ~/.config/devbox/<shell>rc does the same for interactive shells.
 activate_fnm() {
   [[ -x "$FNM_DIR/fnm" ]] || return 1
   export FNM_DIR
@@ -534,32 +485,6 @@ npm_global_installed() {
   [[ -d "$NPM_GLOBAL_PREFIX/lib/node_modules/$1" ]]
 }
 
-ensure_fnm_shell_init() {
-  local body rc shell fnm_dir="$FNM_DIR"
-  # Written as $HOME/... when under the home directory, so the block reads the
-  # same on every machine and the audit can compare it.
-  [[ "$fnm_dir" == "$HOME/"* ]] && fnm_dir="\$HOME/${fnm_dir#"$HOME"/}"
-  body="$(mktemp)"
-  for pair in ".bashrc:bash" ".zshrc:zsh"; do
-    rc="$HOME/${pair%%:*}"; shell="${pair##*:}"
-    [[ -f "$rc" ]] || continue
-    cat > "$body" <<FNMRC
-# Node version manager. --use-on-cd switches Node on entering a directory that
-# carries .nvmrc / .node-version / package.json engines; elsewhere the fnm
-# default applies. npm globals live in one prefix shared by every version (~/.npmrc).
-if [ -x "$fnm_dir/fnm" ]; then
-  export FNM_DIR="$fnm_dir"
-  export PATH="\$FNM_DIR:\$PATH"
-  eval "\$(fnm env --use-on-cd --shell $shell)"
-fi
-FNMRC
-    if ! set_managed_block "$rc" "fnm" "$body" "fnm"; then
-      echo "→ Adding fnm init to $(basename "$rc")"
-      wrap_managed_block "fnm" "$body" >> "$rc"
-    fi
-  done
-  rm -f "$body"
-}
 
 # Earlier Node installs fnm supersedes: apt's nodejs, NodeSource, nvm, and globals
 # in the root-owned prefix those used. Each is left alone unless you say so —
@@ -661,12 +586,11 @@ ensure_node() {
   else
     echo "→ Installing fnm"
     # --skip-shell: the installer would append an unmanaged block to one rc file;
-    # ensure_fnm_shell_init writes a managed one to both.
+    # ~/.config/devbox/<shell>rc initialises fnm for both shells.
     curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir "$FNM_DIR" --skip-shell
     activate_fnm
     echo "✓ fnm installed ($(fnm --version))"
   fi
-  ensure_fnm_shell_init
 
   if fnm list 2>/dev/null | grep -qE "^\* v${NODE_MAJOR_VERSION}\."; then
     echo "✓ node ${NODE_MAJOR_VERSION}.x already installed (fnm)"
@@ -752,20 +676,6 @@ ensure_claude_code() {
   echo "✓ Claude Code installed — run 'claude' to sign in"
 }
 
-# Append `eval "$(<tool> init <shell>)"` to bash/zsh rc files (idempotent).
-ensure_shell_init() {
-  local tool="$1" marker="$2"   # marker: unique substring already present when wired
-  for pair in ".bashrc:bash" ".zshrc:zsh"; do
-    local rc="$HOME/${pair%%:*}" shell="${pair##*:}"
-    [[ -f "$rc" ]] || continue
-    if grep -q "$marker" "$rc"; then
-      echo "✓ $tool already in $(basename "$rc")"
-    else
-      echo "→ Adding $tool init to $(basename "$rc")"
-      printf '\neval "$(%s init %s)"\n' "$tool" "$shell" >> "$rc"
-    fi
-  done
-}
 
 ensure_zoxide() {
   if ensure_command zoxide; then
@@ -775,7 +685,6 @@ ensure_zoxide() {
     curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh \
       | sh -s -- --bin-dir "$HOME/.local/bin"
   fi
-  ensure_shell_init zoxide 'zoxide init'
 }
 
 ensure_bat() {
@@ -811,46 +720,8 @@ ensure_eza() {
     sudo apt-get install -y eza
     echo "✓ eza installed"
   fi
-
-  # Convenience aliases: ls/ll/lt -> eza. `--icons=auto`, never a bare `--icons`:
-  # since eza 0.20 the flag takes an optional value, so `ls somedir` would hand
-  # "somedir" to --icons and fail with "invalid value ... for '--icons'".
-  local body
-  body="$(mktemp)"
-  cat > "$body" <<'ALIASES'
-alias ls='eza --icons=auto'
-alias ll='eza -la --icons=auto --git'
-alias lt='eza --tree --level=2 --icons=auto'
-ALIASES
-  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    [[ -f "$rc" ]] || continue
-    migrate_legacy_eza_block "$rc"
-    if ! set_managed_block "$rc" "eza aliases" "$body" "eza aliases"; then
-      echo "→ Adding eza aliases to $(basename "$rc")"
-      wrap_managed_block "eza aliases" "$body" >> "$rc"
-    fi
-  done
-  rm -f "$body"
 }
 
-# Earlier runs wrote a bare '# devbox eza aliases' line followed by the aliases,
-# append-if-absent — so a changed alias never reached an existing machine. Wrap
-# that legacy block in the managed delimiters where it sits, so set_managed_block
-# can rewrite it in place from now on.
-migrate_legacy_eza_block() {
-  local rc="$1" tmp
-  grep -qxF '# devbox eza aliases' "$rc" || return 0
-  echo "→ Converting legacy eza aliases block in $(basename "$rc") to a managed block"
-  tmp="$(mktemp)"
-  awk -v endmark="$MANAGED_END" '
-    $0 == "# devbox eza aliases" { print "# --- devbox: eza aliases ---"; inblock = 1; next }
-    inblock && /^alias (ls|ll|lt)=/ { print; next }
-    inblock { print endmark; inblock = 0 }
-    { print }
-    END { if (inblock) print endmark }
-  ' "$rc" > "$tmp"
-  mv "$tmp" "$rc"
-}
 
 ensure_delta() {
   if ensure_command delta; then
@@ -920,10 +791,8 @@ ensure_glow() {
 }
 
 # oh-my-zsh is the zsh *framework* (completion defaults, git aliases, the
-# termsupport hooks that title the tab) — not the prompt. Starship renders the
-# prompt, and its init runs after omz, so any ZSH_THEME is built and thrown away:
-# ensure_omz forces it empty. Run this before ensure_zsh_plugins/ensure_starship
-# so the appended blocks end up in load order.
+# termsupport hooks that title the tab) — not the prompt. Installed here, loaded by
+# ~/.config/devbox/zshrc with an empty ZSH_THEME, since starship renders the prompt.
 ensure_omz() {
   is_pkg_installed zsh || { echo "✓ zsh not installed, skipping oh-my-zsh"; return; }
   if [[ -d "$HOME/.oh-my-zsh" ]]; then
@@ -933,32 +802,6 @@ ensure_omz() {
     # KEEP_ZSHRC stops the installer replacing an existing .zshrc with its template
     RUNZSH=no CHSH=no KEEP_ZSHRC=yes \
       sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-  fi
-
-  [[ -f "$HOME/.zshrc" ]] || return
-
-  if grep -q 'oh-my-zsh.sh' "$HOME/.zshrc"; then
-    echo "✓ oh-my-zsh already sourced in .zshrc"
-  else
-    echo "→ Adding oh-my-zsh block to .zshrc"
-    cat >> "$HOME/.zshrc" <<OMZ
-
-# devbox oh-my-zsh — framework only; starship (below) renders the prompt
-export ZSH="\$HOME/.oh-my-zsh"
-ZSH_THEME=""
-plugins=($OMZ_PLUGINS)
-source \$ZSH/oh-my-zsh.sh
-OMZ
-  fi
-
-  local theme_line
-  theme_line=$(grep -m1 '^ZSH_THEME=' "$HOME/.zshrc" || true)
-  if [[ -z "$theme_line" ]] || [[ "$theme_line" == 'ZSH_THEME=""'* ]] || [[ "$theme_line" == "ZSH_THEME=''"* ]]; then
-    echo "✓ ZSH_THEME already empty (starship owns the prompt)"
-  else
-    echo "→ Clearing ${theme_line} (starship owns the prompt)"
-    sed -i 's|^ZSH_THEME=.*|ZSH_THEME=""   # starship renders the prompt; an omz theme would be discarded|' \
-      "$HOME/.zshrc"
   fi
 
   # Clone the zsh-users plugins omz loads from custom/plugins
@@ -973,138 +816,137 @@ OMZ
       git clone --depth=1 --quiet "$url" "$dest"
     fi
   done
-
-  # Add anything from OMZ_PLUGINS the plugins=(...) line is missing. Only ever adds,
-  # so hand-added plugins survive a rerun. Compared as whole words against the
-  # existing list — a substring match would re-add "git" to plugins=(git).
-  local want list missing=()
-  list=$(sed -n 's|^plugins=(\(.*\))|\1|p' "$HOME/.zshrc" | head -1)
-  for want in $OMZ_PLUGINS; do
-    [[ " $list " == *" $want "* ]] || missing+=("$want")
-  done
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    echo "→ Adding to omz plugins: ${missing[*]}"
-    sed -i "s|^plugins=(\(.*\))|plugins=(\1 ${missing[*]})|" "$HOME/.zshrc"
-  else
-    echo "✓ omz plugins list already has: $OMZ_PLUGINS"
-  fi
 }
 
-# Fallback loader for the zsh-users plugins. oh-my-zsh loads them from its
-# custom/plugins clones when ensure_omz ran, so this only installs the apt packages
-# and sources them when a clone is absent — sourcing one omz already loads would
-# double the work, and (for autosuggestions) leave two sets of wrapped widgets.
+# Fallback for the zsh-users plugins: the apt packages, for when oh-my-zsh has no
+# clone of one. ~/.config/devbox/zshrc sources an apt copy only if omz is not
+# already loading that plugin, so each loads exactly once.
 ensure_zsh_plugins() {
   is_pkg_installed zsh || { echo "✓ zsh not installed, skipping plugins"; return; }
-  [[ -f "$HOME/.zshrc" ]] || return
-  # autosuggestions first: zsh-syntax-highlighting must be sourced last
   local name
   for name in zsh-autosuggestions zsh-syntax-highlighting; do
-    local file="/usr/share/$name/$name.zsh"
-    if [[ -d "$HOME/.oh-my-zsh/custom/plugins/$name" ]] \
-       && grep -qE "^plugins=\(.*${name}" "$HOME/.zshrc"; then
-      echo "✓ $name loaded by oh-my-zsh"
-      continue
-    fi
-    ensure_pkg "$name"
-    if grep -q "$name.zsh" "$HOME/.zshrc"; then
-      echo "✓ $name already sourced in .zshrc"
-    elif [[ -f "$file" ]]; then
-      echo "→ Sourcing $name in .zshrc"
-      printf '\nsource %s\n' "$file" >> "$HOME/.zshrc"
+    if [[ -d "$HOME/.oh-my-zsh/custom/plugins/$name" ]]; then
+      echo "✓ $name comes from oh-my-zsh"
+    else
+      ensure_pkg "$name"
     fi
   done
 }
 
+# =========================
+# Shell config: ~/.config/devbox/{zshrc,bashrc}
+# =========================
+#
+# Everything setup configures for an interactive shell lives in ONE generated file
+# per shell, rewritten whole on every run, and ~/.zshrc / ~/.bashrc carry only a
+# "devbox: loader" block that sources it. Load order is then a property of a file
+# this script owns outright: oh-my-zsh before the history settings it would
+# otherwise override, fzf before the Tab binding it would otherwise clobber,
+# starship last. (The previous design spliced a dozen blocks into the user's own
+# rc file and had to audit their line positions to keep that order.)
+#
+# The file depends on nothing but the PARAMETERS above — no probing of what is
+# installed — so `bash setup-ubuntu.sh --render-rc zsh` reproduces it exactly and
+# audit-ubuntu.sh diffs against that. What is installed is checked when the shell
+# starts instead: every section is guarded, so a removed tool never breaks a shell.
+
+DEVBOX_RC_DIR="$HOME/.config/devbox"
 MANAGED_END='# --- end devbox block ---'
 
-# Rewrite the body of an existing '# --- devbox: <marker> ---' block IN PLACE,
-# leaving the block where it already sits. Returns 1 when the block is absent, so
-# the caller decides where a first-time block goes.
-#
-# In place matters twice over here: marker-presence-only checks strand every
-# existing machine on the old block the moment the snippet changes (see
-# Set-ManagedProfileBlock on the Windows side), and for the zsh history blocks the
-# *position* is load-bearing — a delete-and-reappend would land the block on the
-# wrong side of oh-my-zsh or fzf and silently stop working.
-set_managed_block() {
-  local file="$1" marker="$2" body_file="$3" label="$4"
-  local begin="# --- devbox: ${marker} ---" tmp
-  grep -qxF "$begin" "$file" || return 1
+render_devbox_rc() {
+  local shell="$1" fnm_dir="$FNM_DIR"
+  case "$shell" in
+    zsh|bash) ;;
+    *) echo "render_devbox_rc: unknown shell '$shell' (bash|zsh)" >&2; return 1 ;;
+  esac
+  # Written as $HOME/... when under the home directory, so the file reads the same
+  # on every machine and for every user.
+  [[ "$fnm_dir" == "$HOME/"* ]] && fnm_dir="\$HOME/${fnm_dir#"$HOME"/}"
 
-  tmp="$(mktemp)"
-  awk -v begin="$begin" -v endmark="$MANAGED_END" -v bodyfile="$body_file" '
-    $0 == begin {
-      print
-      while ((getline line < bodyfile) > 0) print line
-      close(bodyfile); inblock = 1; next
-    }
-    inblock && $0 == endmark { print; inblock = 0; next }
-    inblock { next }
-    { print }
-  ' "$file" > "$tmp"
+  cat <<HEADER
+# Generated by devbox (setup-ubuntu.sh) and rewritten on every run: edits here are lost.
+# Sourced by the "devbox: loader" block in ~/.${shell}rc. Put your own settings in
+# ~/.${shell}rc — lines above the loader run before this file, lines below it run
+# after it and win. The section order below is load-bearing; each says why.
 
-  if cmp -s "$tmp" "$file"; then
-    echo "✓ $label already current in $(basename "$file")"
-    rm -f "$tmp"
+# ~/.local/bin holds starship, zoxide, claude and the fd/bat/aspire shims.
+case ":\$PATH:" in *":\$HOME/.local/bin:"*) ;; *) export PATH="\$HOME/.local/bin:\$PATH" ;; esac
+HEADER
+
+  if [[ "$INSTALL_NODE" == "true" ]]; then
+    cat <<FNM
+
+# Node (fnm). --use-on-cd switches Node on entering a directory that carries
+# .nvmrc / .node-version / package.json engines; elsewhere the fnm default applies.
+# npm globals live in one prefix shared by every version (~/.npmrc).
+if [ -x "$fnm_dir/fnm" ]; then
+  export FNM_DIR="$fnm_dir"
+  export PATH="\$FNM_DIR:\$PATH"
+  eval "\$(fnm env --use-on-cd --shell $shell)"
+fi
+FNM
+  fi
+
+  if [[ "$shell" == "zsh" ]]; then
+    render_devbox_zsh_body
   else
-    echo "→ Rewriting $label block in $(basename "$file")"
-    mv "$tmp" "$file"
+    render_devbox_bash_body
   fi
 }
 
-# Wrap a body in the managed delimiters, ready to splice or append.
-wrap_managed_block() {
-  local marker="$1" body_file="$2"
-  printf '\n# --- devbox: %s ---\n' "$marker"
-  cat "$body_file"
-  printf '%s\n' "$MANAGED_END"
-}
+render_devbox_zsh_body() {
+  if [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]]; then
+    cat <<ZAUTO
 
-# Splice a block into a file immediately BEFORE the first line containing a literal
-# anchor substring; append to the end when no line contains it. Needed because `>>`
-# can only ever put a load-order-sensitive block in the wrong place.
-#
-# The anchor is matched with index(), not a regex: awk mangles the `\$` in an
-# anchor like `\$ZSH/oh-my-zsh.sh` into a bare `$`, which is an end-of-line anchor
-# in ERE and matches nothing — the splice then silently drops the block.
-insert_before_anchor() {
-  local file="$1" anchor="$2" block_file="$3" tmp
-  tmp="$(mktemp)"
-  awk -v anchor="$anchor" -v blockfile="$block_file" '
-    function emit(  line) { while ((getline line < blockfile) > 0) print line; close(blockfile) }
-    !spliced && index($0, anchor) { emit(); spliced = 1 }
-    { print }
-    END { if (!spliced) emit() }
-  ' "$file" > "$tmp" && mv "$tmp" "$file"
-  rm -f "$tmp"
-}
+# Inline suggestions — BEFORE oh-my-zsh loads zsh-autosuggestions, which reads some
+# of its settings only at load time. The stock fg=8 is invisible on the dark themes
+# this repo configures.
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='$ZSH_AUTOSUGGEST_COLOR'
+ZSH_AUTOSUGGEST_STRATEGY=(history completion)   # fall back to completion when history has no match
+ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE=40              # stop suggesting on very long lines (latency)
+ZAUTO
+  fi
 
-# History retention + PSReadLine-style inline suggestion UX for zsh, and history
-# retention for bash. Three managed blocks, two of them load-order sensitive:
-#
-#   1. "zsh history" MUST sit above `source $ZSH/oh-my-zsh.sh`. omz's
-#      lib/history.zsh assigns HISTSIZE/SAVEHIST unconditionally, and
-#      zsh-autosuggestions only honours ZSH_AUTOSUGGEST_* variables that are
-#      already set at the moment the plugin loads.
-#   2. "zsh history keys" MUST sit below the fzf integration, which binds ^I to
-#      fzf-completion when it loads and would otherwise clobber the Tab widget
-#      defined here.
-#   3. "bash history" is a plain append — Ubuntu's stock .bashrc sets
-#      HISTSIZE=1000/HISTFILESIZE=2000 near the top, so last assignment wins.
-#
-# Run this AFTER ensure_omz / ensure_fzf_shell_integration so both anchors exist.
-ensure_shell_history() {
-  local body wrapped
-  body="$(mktemp)"; wrapped="$(mktemp)"
+  if [[ "$INSTALL_OMZ" == "true" ]]; then
+    cat <<'OMZ'
 
-  if [[ -f "$HOME/.zshrc" ]]; then
-    # Note: no literal 'source $ZSH/oh-my-zsh.sh' in these comments — the audit
-    # locates that anchor by line number and a quoted copy would shadow the real one.
-    cat > "$body" <<ZHIST
-# Keep this block ABOVE the oh-my-zsh source line: omz's lib/history.zsh reassigns
-# HISTSIZE/SAVEHIST, and zsh-autosuggestions only reads ZSH_AUTOSUGGEST_* that are
-# already set at the moment the plugin loads.
+# oh-my-zsh — the framework only (completion, git aliases, tab titles). Starship
+# renders the prompt, so no theme. A plugins=(...) set above the loader in ~/.zshrc
+# is kept; devbox's own plugins go after it — zsh-syntax-highlighting has to load
+# after every other plugin — and only those actually installed, so a missing
+# clone is not an omz error.
+export ZSH="$HOME/.oh-my-zsh"
+if [[ -f "$ZSH/oh-my-zsh.sh" ]]; then
+  ZSH_THEME=""
+  typeset -ga plugins
+OMZ
+    printf '  _devbox_plugins=(%s)\n' "$OMZ_PLUGINS"
+    cat <<'OMZ'
+  plugins=(${plugins:|_devbox_plugins})
+  for _p in $_devbox_plugins; do
+    [[ -d "$ZSH/plugins/$_p" || -d "${ZSH_CUSTOM:-$ZSH/custom}/plugins/$_p" ]] && plugins+=("$_p")
+  done
+  unset _p _devbox_plugins
+  source "$ZSH/oh-my-zsh.sh"
+fi
+OMZ
+  fi
+
+  if [[ "$INSTALL_ZSH_PLUGINS" == "true" ]]; then
+    cat <<'ZAPT'
+
+# zsh-autosuggestions from apt, only when oh-my-zsh is not already loading it.
+if (( ! ${plugins[(Ie)zsh-autosuggestions]:-0} )) \
+   && [[ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]]; then
+  source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+fi
+ZAPT
+  fi
+
+  if [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]]; then
+    cat <<ZHIST
+
+# History — AFTER oh-my-zsh, whose lib/history.zsh assigns HISTSIZE/SAVEHIST too.
 HISTFILE="\$HOME/.zsh_history"
 HISTSIZE=$SHELL_HISTORY_SIZE     # entries held in memory
 SAVEHIST=$SHELL_HISTORY_SIZE     # entries written to disk; a smaller value truncates the file on every write
@@ -1114,25 +956,23 @@ setopt HIST_IGNORE_SPACE         # a leading space keeps a command out of histor
 setopt HIST_FIND_NO_DUPS         # don't re-offer a duplicate while searching
 setopt HIST_REDUCE_BLANKS
 setopt SHARE_HISTORY             # append immediately and share across live shells
-# Ghost text: the stock fg=8 is invisible on the dark themes this repo configures.
-ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='$ZSH_AUTOSUGGEST_COLOR'
-ZSH_AUTOSUGGEST_STRATEGY=(history completion)   # fall back to completion when history has no match
-ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE=40              # stop suggesting on very long lines (latency)
 ZHIST
-    if ! set_managed_block "$HOME/.zshrc" "zsh history" "$body" "zsh history settings"; then
-      echo "→ Adding zsh history settings to .zshrc (above the oh-my-zsh source, when present)"
-      wrap_managed_block "zsh history" "$body" > "$wrapped"
-      # Anchor on the path alone so both `source $ZSH/...` and `. $ZSH/...` match.
-      insert_before_anchor "$HOME/.zshrc" '$ZSH/oh-my-zsh.sh' "$wrapped"
-    fi
+  fi
 
-    cat > "$body" <<'ZKEYS'
-# Keep this block BELOW the fzf integration, which binds ^I (Tab) to fzf-completion
-# and would otherwise win. Mirrors the PowerShell side: → accepts the whole
-# suggestion, Ctrl+→ one word, Ctrl+R lists the history.
-bindkey '^[[C'    autosuggest-accept   # Right arrow: accept the whole suggestion
-bindkey '^[[1;5C' forward-word         # Ctrl+Right: accept one word of it
-bindkey '^ '      autosuggest-accept   # Ctrl+Space: accept (Right arrow is taken mid-line)
+  render_devbox_fzf zsh
+
+  if [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]]; then
+    cat <<'ZKEYS'
+
+# Suggestion keys — AFTER fzf, which binds ^I (Tab) to fzf-completion when it
+# loads. Mirrors PSReadLine on Windows: → accepts the whole suggestion, Ctrl+→ one
+# word, Ctrl+R lists the history. Bound only when the widget exists: binding the
+# Right arrow to a missing widget would break plain cursor movement.
+if (( ${+widgets[autosuggest-accept]} )); then
+  bindkey '^[[C' autosuggest-accept   # Right arrow: accept the whole suggestion
+  bindkey '^ '   autosuggest-accept   # Ctrl+Space: accept (Right arrow is taken mid-line)
+fi
+bindkey '^[[1;5C' forward-word        # Ctrl+Right: accept one word of it
 # Tab: take the ghost suggestion when one is showing, otherwise complete as usual.
 _devbox_tab_accept_or_complete() {
   if [[ -n "$POSTDISPLAY" ]]; then
@@ -1148,16 +988,43 @@ bindkey '^I' _devbox_tab_accept_or_complete
 # Ctrl+R history picker — the closest thing zsh has to PSReadLine's ListView.
 export FZF_CTRL_R_OPTS="--height=45% --layout=reverse --border --info=inline --prompt='history > '"
 ZKEYS
-    if ! set_managed_block "$HOME/.zshrc" "zsh history keys" "$body" "zsh history keybindings"; then
-      echo "→ Adding zsh history keybindings to .zshrc"
-      wrap_managed_block "zsh history keys" "$body" >> "$HOME/.zshrc"
-    fi
   fi
 
-  if [[ -f "$HOME/.bashrc" ]]; then
-    cat > "$body" <<BHIST
-# Ubuntu's stock .bashrc caps history at 1000/2000 lines near the top of the file;
-# these later assignments win.
+  render_devbox_eza
+
+  cat <<'ZCWD'
+
+# Report the cwd (OSC 7 — WezTerm uses it for tab titles and new-pane cwd) and the
+# tab title (OSC 0). oh-my-zsh's termsupport already does both when it is loaded.
+__devbox_term_cwd() {
+  local leaf="${PWD##*/}"
+  printf '\033]7;file://%s%s\033\\' "${HOST:-localhost}" "$PWD"
+  printf '\033]0;%s\007' "${leaf:-/}"
+}
+autoload -Uz add-zsh-hook
+(( ${+functions[omz_termsupport_precmd]} )) || add-zsh-hook precmd __devbox_term_cwd
+ZCWD
+
+  render_devbox_prompt_tools zsh
+
+  if [[ "$INSTALL_ZSH_PLUGINS" == "true" ]]; then
+    cat <<'ZSYH'
+
+# zsh-syntax-highlighting from apt when oh-my-zsh is not loading it — LAST: it only
+# highlights for widgets that exist by the time it loads.
+if (( ! ${plugins[(Ie)zsh-syntax-highlighting]:-0} )) \
+   && [[ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]]; then
+  source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+fi
+ZSYH
+  fi
+}
+
+render_devbox_bash_body() {
+  if [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]]; then
+    cat <<BHIST
+
+# History. Ubuntu's stock .bashrc caps it at 1000/2000 lines; these run later and win.
 HISTSIZE=$SHELL_HISTORY_SIZE
 HISTFILESIZE=$SHELL_HISTORY_SIZE
 HISTCONTROL=ignoreboth:erasedups
@@ -1169,13 +1036,210 @@ case "\${PROMPT_COMMAND:-}" in
   *) PROMPT_COMMAND="history -a\${PROMPT_COMMAND:+;\$PROMPT_COMMAND}" ;;
 esac
 BHIST
-    if ! set_managed_block "$HOME/.bashrc" "bash history" "$body" "bash history settings"; then
-      echo "→ Adding bash history settings to .bashrc"
-      wrap_managed_block "bash history" "$body" >> "$HOME/.bashrc"
-    fi
   fi
 
-  rm -f "$body" "$wrapped"
+  render_devbox_fzf bash
+  render_devbox_eza
+
+  cat <<'BCWD'
+
+# Report the cwd (OSC 7 — WezTerm uses it for tab titles and new-pane cwd) and the
+# tab title (OSC 0): starship replaces PS1, dropping the OSC 0 in Ubuntu's default.
+__devbox_term_cwd() {
+  local leaf="${PWD##*/}"
+  printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-localhost}" "$PWD"
+  printf '\033]0;%s\007' "${leaf:-/}"
+}
+case "${PROMPT_COMMAND:-}" in
+  *__devbox_term_cwd*) ;;
+  *) PROMPT_COMMAND="__devbox_term_cwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+esac
+BCWD
+
+  render_devbox_prompt_tools bash
+}
+
+# fzf key bindings (Ctrl+T files, Ctrl+R history, Alt+C cd) and ** completion.
+render_devbox_fzf() {
+  local shell="$1"
+  cat <<FZF
+
+# fzf key bindings (Ctrl+T, Ctrl+R, Alt+C) and ** completion. fzf 0.48+ generates
+# them (\`fzf --$shell\`); older packaged builds — Ubuntu 24.04 ships 0.44 — only
+# ship example scripts, whose location has moved between releases.
+if command -v fzf >/dev/null 2>&1; then
+  if _devbox_fzf="\$(fzf --$shell 2>/dev/null)"; then
+    eval "\$_devbox_fzf"
+  else
+    for _d in /usr/share/doc/fzf/examples /usr/share/fzf /usr/share/fzf/shell; do
+      if [ -f "\$_d/key-bindings.$shell" ]; then
+        . "\$_d/key-bindings.$shell"
+        [ -f "\$_d/completion.$shell" ] && . "\$_d/completion.$shell"
+        break
+      fi
+    done
+  fi
+  unset _devbox_fzf _d
+fi
+FZF
+}
+
+render_devbox_eza() {
+  [[ "$INSTALL_EZA" == "true" ]] || return 0
+  cat <<'EZA'
+
+# ls → eza. `--icons=auto`, never a bare `--icons`: since eza 0.20 that flag takes an
+# optional value, so `ls somedir` would hand "somedir" to it and fail.
+if command -v eza >/dev/null 2>&1; then
+  alias ls='eza --icons=auto'
+  alias ll='eza -la --icons=auto --git'
+  alias lt='eza --tree --level=2 --icons=auto'
+fi
+EZA
+}
+
+# zoxide, then starship LAST: zoxide hooks in after compinit (which oh-my-zsh ran
+# above), and starship's prompt must be the one left standing.
+render_devbox_prompt_tools() {
+  local shell="$1"
+  if [[ "$INSTALL_ZOXIDE" == "true" ]]; then
+    cat <<ZOX
+
+# zoxide: z / zi, a cd that learns. After compinit, which it hooks into.
+if command -v zoxide >/dev/null 2>&1; then eval "\$(zoxide init $shell)"; fi
+ZOX
+  fi
+  if [[ "$INSTALL_STARSHIP" == "true" ]]; then
+    cat <<STAR
+
+# Starship renders the prompt — last, so no later init replaces it.
+if command -v starship >/dev/null 2>&1; then eval "\$(starship init $shell)"; fi
+STAR
+  fi
+}
+
+# The one block devbox keeps in ~/.zshrc / ~/.bashrc.
+render_devbox_loader() {
+  local shell="$1"
+  cat <<LOADER
+# --- devbox: loader ---
+# Everything devbox configures for $shell lives in ~/.config/devbox/${shell}rc, regenerated
+# by setup-ubuntu.sh. Lines above this block run before it; lines below run after it.
+if [ -f "\$HOME/.config/devbox/${shell}rc" ]; then . "\$HOME/.config/devbox/${shell}rc"; fi
+$MANAGED_END
+LOADER
+}
+
+# Rewrite the body of an existing '# --- devbox: <marker> ---' block IN PLACE.
+# Returns 1 when the block is absent, so the caller decides where it goes.
+set_managed_block() {
+  local file="$1" marker="$2" block_file="$3" label="$4"
+  local begin="# --- devbox: ${marker} ---" tmp
+  grep -qxF "$begin" "$file" || return 1
+  tmp="$(mktemp)"
+  awk -v begin="$begin" -v endmark="$MANAGED_END" -v blockfile="$block_file" '
+    $0 == begin {
+      while ((getline line < blockfile) > 0) print line
+      close(blockfile); inblock = 1; next
+    }
+    inblock && $0 == endmark { inblock = 0; next }
+    inblock { next }
+    { print }
+  ' "$file" > "$tmp"
+  if cmp -s "$tmp" "$file"; then
+    echo "✓ $label already current in $(basename "$file")"
+    rm -f "$tmp"
+  else
+    echo "→ Rewriting $label in $(basename "$file")"
+    mv "$tmp" "$file"
+  fi
+}
+
+# Strip from an rc file everything earlier versions of this script wrote into it —
+# now generated into ~/.config/devbox — and, in ~/.zshrc, put the loader where the
+# oh-my-zsh source line was, so the user's lines keep their side of it. Only exact
+# lines and marked blocks devbox itself wrote are removed; everything else stays.
+# The first time it changes a file it leaves <rc>.pre-devbox-config.bak.
+#
+# Regexes live inside the awk program, never in -v: awk processes escapes in -v
+# values and turns the `\$` of `\$ZSH` into a bare `$` — an end-of-line anchor
+# that matches nothing, so the migration would silently skip that line.
+migrate_rc_to_devbox_config() {
+  local rc="$1" shell="$2" loader tmp has_loader=0
+  loader="$(mktemp)"; tmp="$(mktemp)"
+  render_devbox_loader "$shell" > "$loader"
+  if grep -qxF '# --- devbox: loader ---' "$rc"; then has_loader=1; fi
+  awk -v shell="$shell" -v loaderfile="$loader" -v endmark="$MANAGED_END" -v has_loader="$has_loader" '
+    function flush() { while (nb > 0) { print ""; nb-- } }
+    function drop()  { nb = 0 }
+    skip_block { if ($0 == endmark) skip_block = 0; next }
+    skip_cwd   { if ($0 ~ /^esac$/ || $0 ~ /add-zsh-hook precmd __devbox_term_cwd/) skip_cwd = 0; next }
+    eza_legacy && /^alias (ls|ll|lt)=/ { next }
+    { eza_legacy = 0 }
+    omz_legacy {   # the lines under the old "# devbox oh-my-zsh" comment
+      if (/^export ZSH=/ || /^ZSH_THEME=/) next
+      if (!/^plugins=\(/) omz_legacy = 0   # plugins=(...) stays: it may hold your own
+    }
+    /^[[:space:]]*$/ { nb++; next }
+    /^# --- devbox: (fnm|eza aliases|zsh history|zsh history keys|bash history) ---$/ { drop(); skip_block = 1; next }
+    $0 == "# devbox eza aliases" { drop(); eza_legacy = 1; next }
+    /^# devbox terminal cwd/     { drop(); skip_cwd = 1; next }
+    /^# devbox oh-my-zsh/        { drop(); omz_legacy = 1; next }
+    /^eval "\$\((starship|zoxide) init (bash|zsh)\)"$/ ||
+    /^eval "\$\(fzf --(bash|zsh)\)"$/ ||
+    /^source \/usr\/share\/(doc\/fzf\/examples|fzf|fzf\/shell)\/(key-bindings|completion)\.(bash|zsh)$/ ||
+    /^source \/usr\/share\/zsh-(autosuggestions|syntax-highlighting)\/zsh-(autosuggestions|syntax-highlighting)\.zsh$/ ||
+    /^export PATH="\$HOME\/\.local\/bin:\$PATH"$/ { drop(); next }
+    shell == "zsh" && /^[[:space:]]*(source|\.)[[:space:]]+"?(\$ZSH|\$\{ZSH\})"?\/oh-my-zsh\.sh/ {
+      if (!placed && has_loader == 0) {
+        flush(); while ((getline l < loaderfile) > 0) print l; close(loaderfile); placed = 1
+      } else drop()
+      next
+    }
+    { flush(); print }
+    END { flush() }
+  ' "$rc" > "$tmp"
+  rm -f "$loader"
+  if cmp -s "$tmp" "$rc"; then
+    rm -f "$tmp"
+    return
+  fi
+  if [[ ! -e "$rc.pre-devbox-config.bak" ]]; then
+    cp "$rc" "$rc.pre-devbox-config.bak"
+    echo "  (backup of the previous $(basename "$rc"): $(basename "$rc").pre-devbox-config.bak)"
+  fi
+  echo "→ Moved devbox-written lines out of $(basename "$rc") into ~/.config/devbox/${shell}rc"
+  mv "$tmp" "$rc"
+}
+
+# Write ~/.config/devbox/<shell>rc and make sure <rc> sources it.
+ensure_devbox_shell_config() {
+  local shell rc gen body
+  mkdir -p "$DEVBOX_RC_DIR"
+  # The generated files skip what is missing rather than break the shell, so say so.
+  ensure_command fzf || echo "⚠ fzf not installed — its Ctrl+R / Ctrl+T bindings will be skipped"
+  body="$(mktemp)"
+  for shell in bash zsh; do
+    rc="$HOME/.${shell}rc"
+    [[ -f "$rc" ]] || continue
+    gen="$DEVBOX_RC_DIR/${shell}rc"
+
+    render_devbox_rc "$shell" > "$body"
+    if cmp -s "$body" "$gen"; then
+      echo "✓ ~/.config/devbox/${shell}rc already current"
+    else
+      echo "→ Writing ~/.config/devbox/${shell}rc"
+      cp "$body" "$gen"
+    fi
+
+    migrate_rc_to_devbox_config "$rc" "$shell"
+    render_devbox_loader "$shell" > "$body"
+    if ! set_managed_block "$rc" "loader" "$body" "devbox loader"; then
+      echo "→ Adding the devbox loader to $(basename "$rc")"
+      { printf '\n'; cat "$body"; } >> "$rc"
+    fi
+  done
+  rm -f "$body"
 }
 
 ensure_starship() {
@@ -1185,13 +1249,6 @@ ensure_starship() {
   else
     echo "→ Installing starship"
     curl -fsSL https://starship.rs/install.sh | sh -s -- --yes --bin-dir "$HOME/.local/bin"
-    # Ensure ~/.local/bin is on PATH in all present shell rc files (idempotent)
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-      if [[ -f "$rc" ]] && ! grep -q '\.local/bin' "$rc"; then
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
-        echo "→ Added ~/.local/bin to PATH in $(basename "$rc")"
-      fi
-    done
   fi
 
   # Apply a preset once — never clobber an existing starship.toml the user may have edited
@@ -1207,66 +1264,7 @@ ensure_starship() {
     starship preset "$STARSHIP_PRESET" -o "$config_file"
     echo "✓ Preset saved to $config_file"
   fi
-
-  # Wire init into shell rc files (idempotent; starship init must run last, so append)
-  if [[ -f "$HOME/.bashrc" ]] && ! grep -q 'starship init' "$HOME/.bashrc"; then
-    echo "→ Adding starship init to .bashrc"
-    printf '\neval "$(starship init bash)"\n' >> "$HOME/.bashrc"
-  elif [[ -f "$HOME/.bashrc" ]]; then
-    echo "✓ starship already in .bashrc"
-  fi
-  if [[ -f "$HOME/.zshrc" ]] && ! grep -q 'starship init' "$HOME/.zshrc"; then
-    echo "→ Adding starship init to .zshrc"
-    printf '\neval "$(starship init zsh)"\n' >> "$HOME/.zshrc"
-  elif [[ -f "$HOME/.zshrc" ]]; then
-    echo "✓ starship already in .zshrc"
-  fi
-}
-
-# Report the cwd to the terminal on every prompt: OSC 7 (the cwd itself, which
-# WezTerm reads for tab titles and new-pane inheritance) plus OSC 0 (the title,
-# which Windows Terminal and VS Code use as the tab label). Ubuntu's default PS1
-# carries an OSC 0 escape, but starship replaces PS1 outright, so without this
-# the tab reads "bash". Prepended to PROMPT_COMMAND at shell start, which keeps
-# starship's and zoxide's own hooks intact.
-ensure_terminal_cwd() {
-  for pair in ".bashrc:bash" ".zshrc:zsh"; do
-    local rc_file="${pair%%:*}" shell="${pair##*:}" rc="$HOME/${pair%%:*}"
-    [[ -f "$rc" ]] || continue
-    if grep -q 'devbox terminal cwd' "$rc"; then
-      echo "✓ Terminal cwd/title reporting already in $rc_file"
-      continue
-    fi
-    echo "→ Adding terminal cwd/title reporting to $rc_file"
-    if [[ "$shell" == "bash" ]]; then
-      cat >> "$rc" <<'TERMCWD'
-
-# devbox terminal cwd — report the cwd (OSC 7) and the tab title (OSC 0)
-__devbox_term_cwd() {
-  local leaf="${PWD##*/}"
-  printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-localhost}" "$PWD"
-  printf '\033]0;%s\007' "${leaf:-/}"
-}
-case "${PROMPT_COMMAND:-}" in
-  *__devbox_term_cwd*) ;;
-  *) PROMPT_COMMAND="__devbox_term_cwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
-esac
-TERMCWD
-    else
-      cat >> "$rc" <<'TERMCWD'
-
-# devbox terminal cwd — report the cwd (OSC 7) and the tab title (OSC 0).
-# oh-my-zsh's termsupport already does both; leave it alone when it is loaded.
-__devbox_term_cwd() {
-  local leaf="${PWD##*/}"
-  printf '\033]7;file://%s%s\033\\' "${HOST:-localhost}" "$PWD"
-  printf '\033]0;%s\007' "${leaf:-/}"
-}
-autoload -Uz add-zsh-hook
-(( ${+functions[omz_termsupport_precmd]} )) || add-zsh-hook precmd __devbox_term_cwd
-TERMCWD
-    fi
-  done
+  # Its init lives in ~/.config/devbox/<shell>rc (ensure_devbox_shell_config).
 }
 
 # Keyed on the pinned SDK, not on "is dotnet present at all". .NET SDKs install
@@ -1440,6 +1438,17 @@ ensure_git_signing() {
 # RUN
 # =========================
 
+# `--render-rc bash|zsh` prints the generated ~/.config/devbox/<shell>rc and exits,
+# touching nothing: audit-ubuntu.sh diffs the installed file against it.
+if [[ "${1:-}" == "--render-rc" ]]; then
+  render_devbox_rc "${2:?usage: setup-ubuntu.sh --render-rc bash|zsh}"
+  exit
+fi
+
+# Tools this run installs into ~/.local/bin must be found by its own later checks
+# (and by pipx ensurepath, which would otherwise append a PATH line to the rc files).
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
+
 # Validate required parameters
 if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
   detect_windows_git_identity
@@ -1456,7 +1465,7 @@ if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
 fi
 
 # Compute total step count for progress display
-TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
+TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, code dir, shell config, Done
 [[ "$CONFIGURE_WSL_CONF" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$SET_GIT_DEFAULTS"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_GITHUB_CLI" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -1475,7 +1484,6 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, fzf, code dir, Done
 [[ "$INSTALL_GLOW"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_OMZ"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ZSH_PLUGINS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
-[[ "$CONFIGURE_SHELL_HISTORY" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_NODE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_CLAUDE_CODE" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_DOTNET"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -1500,7 +1508,7 @@ if [[ "$CONFIGURE_WSL_CONF" == "true" ]]; then
 fi
 
 log "Setting up zsh"
-# Ensure .zshrc exists so later sections (fd PATH, fzf, starship) can write to it
+# Ensure .zshrc exists so ensure_devbox_shell_config can add its loader to it
 if is_pkg_installed zsh; then
   if [[ ! -f "$HOME/.zshrc" ]]; then
     echo "→ Creating minimal ~/.zshrc"
@@ -1531,17 +1539,7 @@ if ensure_command fdfind && ! ensure_command fd; then
     mkdir -p "$HOME/.local/bin"
     ln -s "$(command -v fdfind)" "$HOME/.local/bin/fd"
   fi
-  # Ensure ~/.local/bin is on PATH in all present shell rc files (idempotent)
-  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    if [[ -f "$rc" ]] && ! grep -q '\.local/bin' "$rc"; then
-      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
-      echo "→ Added ~/.local/bin to PATH in $(basename "$rc")"
-    fi
-  done
 fi
-
-log "Configuring fzf shell integration"
-ensure_fzf_shell_integration
 
 log "Ensuring code directory"
 ensure_dir "$CODE_DIR"
@@ -1610,9 +1608,6 @@ if [[ "$INSTALL_STARSHIP" == "true" ]]; then
   ensure_starship
 fi
 
-log "Configuring terminal cwd/title reporting (OSC 7 + OSC 0)"
-ensure_terminal_cwd
-
 if [[ "$INSTALL_ZOXIDE" == "true" ]]; then
   log "Installing zoxide"
   ensure_zoxide
@@ -1658,12 +1653,6 @@ if [[ "$INSTALL_ZSH_PLUGINS" == "true" ]]; then
   ensure_zsh_plugins
 fi
 
-if [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]]; then
-  # After omz and fzf: this splices relative to both of their blocks.
-  log "Configuring shell history and inline suggestions"
-  ensure_shell_history
-fi
-
 if [[ "$INSTALL_NODE" == "true" ]]; then
   log "Installing fnm, Node.js and npm-global CLIs"
   ensure_node
@@ -1703,6 +1692,9 @@ if [[ "$DOCKER_CHECK" == "true" ]]; then
   log "Checking docker (Rancher Desktop WSL integration)"
   docker_check
 fi
+
+log "Writing shell config (~/.config/devbox) and its loader in the rc files"
+ensure_devbox_shell_config
 
 if [[ "$ENSURE_SSH_KEY" == "true" ]]; then
   log "Ensuring SSH key"

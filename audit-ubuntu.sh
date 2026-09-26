@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2088  # report messages show ~ paths as text, never expand them
 # Read-only DRIFT AUDIT for the WSL/Ubuntu side. Compares the current machine
 # against what setup-ubuntu.sh / update-ubuntu.sh install and configure, and
 # reports where they diverge. It changes NOTHING — every finding carries a
 # two-way reconcile hint: how to fix the drift, and (for unexpected apps) how to
 # adopt it into setup, so the report doubles as a setup-update worklist.
 #
-# "Expected" state is parsed straight out of setup-ubuntu.sh (the APT_PACKAGES
-# array, ensure_pkg / ensure_command calls, rc markers) so this audit can never
-# drift from setup itself.
+# "Expected" state comes straight out of setup-ubuntu.sh — the APT_PACKAGES array
+# and ensure_pkg / ensure_command calls are parsed, and the generated shell config
+# is rendered by `setup-ubuntu.sh --render-rc` — so this audit can never drift
+# from setup itself.
 #
 # Not -e: the audit probes with commands that routinely exit non-zero.
 set -uo pipefail
@@ -131,130 +133,92 @@ fi
 if [[ "$CHECK_CONFIG" == "true" ]]; then
   section "Managed config"
 
-  check_rc_marker() {  # file, grep-pattern, human label — flags missing AND duplicated
-    local file="$1" pat="$2" label="$3"
-    [[ -f "$file" ]] || { report_drift "$(basename "$file") missing entirely." "fix: bash setup-ubuntu.sh"; return; }
-    # grep -c already prints 0 on no match (and exits 1); the old `|| echo 0` here
-    # appended a second 0, and the resulting "0\n0" made every [[ -eq ]] below an
-    # error — so the missing-block branch never fired for any marker.
-    local n; n=$(grep -cE "$pat" "$file" 2>/dev/null); n=${n:-0}
+  # Shell config. Setup generates ~/.config/devbox/<shell>rc whole and leaves a
+  # single loader block in each rc file (ensure_devbox_shell_config). So: the
+  # generated file must match what setup would write now, the loader must be there
+  # exactly once, and nothing an older setup wrote straight into the rc file may be
+  # left behind — it would run a second time, in whatever order it happens to sit.
+  #
+  # Lines those older setups wrote. The same set migrate_rc_to_devbox_config removes.
+  legacy_rc_re='^# --- devbox: (fnm|eza aliases|zsh history|zsh history keys|bash history) ---$'
+  legacy_rc_re+='|^# devbox (eza aliases|terminal cwd|oh-my-zsh)'
+  legacy_rc_re+='|^eval "\$\((starship|zoxide) init (bash|zsh)\)"$|^eval "\$\(fzf --(bash|zsh)\)"$'
+  legacy_rc_re+='|^source /usr/share/(doc/fzf/examples|fzf|fzf/shell)/(key-bindings|completion)\.(bash|zsh)$'
+  legacy_rc_re+='|^source /usr/share/zsh-(autosuggestions|syntax-highlighting)/'
+  # The generated zshrc loads oh-my-zsh itself; a second source line loads it twice.
+  omz_source_re='^[[:space:]]*(source|\.)[[:space:]]+"?(\$ZSH|\$\{ZSH\})"?/oh-my-zsh\.sh'
+
+  for shell in bash zsh; do
+    rc="$HOME/.${shell}rc"; gen="$HOME/.config/devbox/${shell}rc"
+    if [[ "$shell" == "zsh" ]] && ! command -v zsh >/dev/null 2>&1; then continue; fi
+    if [[ ! -f "$rc" ]]; then
+      report_drift "~/.${shell}rc missing entirely." "fix: bash setup-ubuntu.sh"
+      continue
+    fi
+    # grep -c prints 0 itself on no match; `|| true` only absorbs its exit status.
+    n=$(grep -cxF '# --- devbox: loader ---' "$rc" || true)
     if [[ "$n" -eq 0 ]]; then
-      report_drift "$(basename "$file"): $label block missing." "fix: bash setup-ubuntu.sh (re-appends managed blocks)"
+      report_drift "~/.${shell}rc does not load ~/.config/devbox/${shell}rc (devbox loader block missing)." \
+        "fix: bash setup-ubuntu.sh"
     elif [[ "$n" -gt 1 ]]; then
-      report_drift "$(basename "$file"): $label appears $n times (duplicated)." "fix: edit $file and remove the duplicate"
+      report_drift "~/.${shell}rc has the devbox loader $n times — everything devbox configures runs $n times." \
+        "fix: delete all but one '# --- devbox: loader ---' block"
     fi
-  }
-
-  check_rc_present() {  # file, grep-pattern, human label — flags missing only (multi-line blocks are normal)
-    local file="$1" pat="$2" label="$3"
-    [[ -f "$file" ]] || { report_drift "$(basename "$file") missing entirely." "fix: bash setup-ubuntu.sh"; return; }
-    grep -qE "$pat" "$file" 2>/dev/null \
-      || report_drift "$(basename "$file"): $label missing." "fix: bash setup-ubuntu.sh (re-appends managed blocks)"
-  }
-
-  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    check_rc_marker  "$rc" 'starship init'      'starship init'
-    check_rc_marker  "$rc" 'zoxide init'        'zoxide init'
-    check_rc_marker  "$rc" 'devbox: fnm ---'    'fnm init'
-    check_rc_marker  "$rc" 'devbox: eza aliases ---' 'eza aliases'
-    check_rc_marker  "$rc" 'devbox terminal cwd' 'terminal cwd/title reporting'
-    # A line that loads fzf, not a mention — the zsh history keys block names
-    # fzf-completion without loading it, so a bare 'fzf' match could never fail.
-    # Same expression as FZF_LOAD_RE in setup-ubuntu.sh.
-    check_rc_present "$rc" '^[[:space:]]*(source|eval|\.)[^#]*fzf|^plugins=\(([^)]*[[:space:]])?fzf([[:space:]]|\))' 'fzf integration'
-  done
-  check_rc_marker "$HOME/.bashrc" 'devbox: bash history ---'     'bash history settings'
-  check_rc_marker "$HOME/.zshrc"  'devbox: zsh history ---'      'zsh history settings'
-  check_rc_marker "$HOME/.zshrc"  'devbox: zsh history keys ---' 'zsh history keybindings'
-
-  # The two zsh history blocks are load-order sensitive, and being present in the
-  # wrong place fails silently: omz reassigns HISTSIZE/SAVEHIST over anything above
-  # it, and fzf's integration rebinds ^I over anything above it. Compare line
-  # numbers rather than trusting marker presence.
-  if [[ -f "$HOME/.zshrc" ]]; then
-    line_of() { grep -nF -m1 -- "$1" "$HOME/.zshrc" 2>/dev/null | cut -d: -f1; }
-    hist_ln=$(line_of '# --- devbox: zsh history ---')
-    keys_ln=$(line_of '# --- devbox: zsh history keys ---')
-    # Match the real source line, not the managed block's own comment, which quotes
-    # this exact path as documentation and would otherwise always win the -m1.
-    omz_ln=$(grep -nE '^[[:space:]]*(source|\.)[[:space:]]+\$ZSH/oh-my-zsh\.sh' "$HOME/.zshrc" 2>/dev/null | head -1 | cut -d: -f1)
-    # Last line that *loads* fzf, not merely mentions it: key-bindings.zsh and
-    # completion.zsh are sourced separately, and the keys block below references
-    # fzf-completion / FZF_CTRL_R_OPTS by name without loading anything.
-    fzf_ln=$(grep -nE '^[[:space:]]*(source|eval|\.)[^#]*fzf' "$HOME/.zshrc" 2>/dev/null | tail -1 | cut -d: -f1)
-
-    if [[ -n "$hist_ln" && -n "$omz_ln" && "$hist_ln" -gt "$omz_ln" ]]; then
-      report_drift "zsh history block (line $hist_ln) sits below the oh-my-zsh source line (line $omz_ln)." \
-        "omz's lib/history.zsh reassigns HISTSIZE/SAVEHIST, so the block has no effect." \
-        "fix: move the '# --- devbox: zsh history ---' block above the oh-my-zsh source line"
+    if [[ ! -f "$gen" ]]; then
+      report_drift "~/.config/devbox/${shell}rc missing." "fix: bash setup-ubuntu.sh"
+    elif ! cmp -s <(bash "$SETUP" --render-rc "$shell" 2>/dev/null) "$gen"; then
+      report_drift "~/.config/devbox/${shell}rc differs from what setup-ubuntu.sh generates (edited, or setup changed since)." \
+        "see:  diff <(bash setup-ubuntu.sh --render-rc $shell) ~/.config/devbox/${shell}rc" \
+        "fix:  bash setup-ubuntu.sh — it rewrites the file, so move anything of yours into ~/.${shell}rc first"
     fi
-    if [[ -n "$keys_ln" && -n "$fzf_ln" && "$keys_ln" -lt "$fzf_ln" ]]; then
-      report_drift "zsh history keybindings (line $keys_ln) sit above the fzf integration (line $fzf_ln)." \
-        "fzf binds ^I to fzf-completion when it loads, clobbering the Tab widget." \
-        "fix: move the '# --- devbox: zsh history keys ---' block to the end of ~/.zshrc"
+    leftovers=$(grep -nE "$legacy_rc_re" "$rc" | cut -d: -f1 | paste -sd, - || true)
+    if [[ -n "$leftovers" ]]; then
+      report_drift "~/.${shell}rc still carries lines devbox now generates (line $leftovers) — they run twice." \
+        "fix: bash setup-ubuntu.sh (moves them out, keeping ~/.${shell}rc.pre-devbox-config.bak)"
     fi
-
-    # Effective values, not just marker presence — a later HISTSIZE=… anywhere in
-    # the file (or a stale block from an older setup) silently wins.
-    want_hist=$(grep -m1 '^SHELL_HISTORY_SIZE=' "$SETUP" 2>/dev/null | grep -oE '[0-9]+' | head -1)
-    if [[ -n "$want_hist" ]]; then
-      for var in HISTSIZE SAVEHIST; do
-        have=$(grep -oE "^${var}=[0-9]+" "$HOME/.zshrc" 2>/dev/null | tail -1 | cut -d= -f2)
-        if [[ -z "$have" ]]; then
-          report_drift ".zshrc sets no $var (zsh defaults to 1000; omz to 10000)." "fix: bash setup-ubuntu.sh"
-        elif [[ "$have" -lt "$want_hist" ]]; then
-          report_drift ".zshrc $var=$have, below the expected $want_hist — history is being truncated." \
-            "fix: bash setup-ubuntu.sh, or adopt the smaller value by setting SHELL_HISTORY_SIZE in setup-ubuntu.sh"
-        fi
-      done
-    fi
-
-    # zsh-autosuggestions' stock fg=8 renders as invisible ghost text on the dark
-    # terminal themes this repo configures — the suggestion is there, unreadable.
-    style=$(grep -m1 '^ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE=' "$HOME/.zshrc" 2>/dev/null | cut -d= -f2- | tr -d "'\"")
-    case "$style" in
-      '')        report_drift "ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE unset — suggestions render in fg=8 (invisible on dark themes)." \
-                   "fix: bash setup-ubuntu.sh" ;;
-      fg=8|fg=black|fg=0)
-                 report_drift "ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='$style' is the invisible default." \
-                   "fix: bash setup-ubuntu.sh, or set ZSH_AUTOSUGGEST_COLOR to a readable value" ;;
-      *)         report_ok "Inline suggestion colour set ($style)." ;;
-    esac
-  fi
-  # Each zsh-users plugin must be loaded exactly once — as an oh-my-zsh plugin
-  # (custom/plugins clone) or sourced from the apt copy, never both.
-  for zp in zsh-autosuggestions zsh-syntax-highlighting; do
-    via_omz=false; via_apt=false
-    grep -qE "^plugins=\(.*${zp}" "$HOME/.zshrc" 2>/dev/null && via_omz=true
-    # -F: the dot in "<plugin>.zsh" is literal — as a regex it also matches the space
-    # before the next entry on the plugins=(...) line and reports a phantom double load
-    grep -qF "$zp.zsh" "$HOME/.zshrc" 2>/dev/null && via_apt=true
-    if [[ "$via_omz" == true && "$via_apt" == true ]]; then
-      report_drift "$zp is loaded twice (omz plugin + apt source)." \
-        "fix: remove the 'source /usr/share/$zp/...' line from ~/.zshrc"
-    elif [[ "$via_omz" == false && "$via_apt" == false ]]; then
-      report_drift "$zp not loaded in .zshrc." "fix: bash setup-ubuntu.sh"
-    fi
-    if [[ "$via_omz" == true && ! -d "$HOME/.oh-my-zsh/custom/plugins/$zp" ]]; then
-      report_drift "$zp listed in omz plugins=(...) but not cloned into custom/plugins." \
-        "fix: bash setup-ubuntu.sh (clones it)"
+    if [[ "$shell" == "zsh" ]]; then
+      omz_lines=$(grep -nE "$omz_source_re" "$rc" | cut -d: -f1 | paste -sd, - || true)
+      if [[ -n "$omz_lines" ]]; then
+        report_drift "~/.zshrc sources oh-my-zsh itself (line $omz_lines); the devbox zshrc loads it too, so it loads twice." \
+          "fix: bash setup-ubuntu.sh (puts the devbox loader in its place)"
+      fi
     fi
   done
 
-  # oh-my-zsh — framework only. Starship's init runs after it, so any ZSH_THEME is
-  # rendered and thrown away. (Double-loaded plugins are checked per plugin above.)
+  # Effective values, from a real interactive zsh: whatever ~/.zshrc does after the
+  # loader wins, and only a started shell shows the end result. DISABLE_AUTO_UPDATE
+  # and </dev/null keep oh-my-zsh's update prompt from waiting on an answer.
+  want_hist=$(grep -m1 '^SHELL_HISTORY_SIZE=' "$SETUP" 2>/dev/null | grep -oE '[0-9]+' | head -1)
   want_omz=$(grep -m1 '^INSTALL_OMZ=' "$SETUP" 2>/dev/null | grep -oE 'true|false' | head -1 || true)
-  if [[ -d "$HOME/.oh-my-zsh" ]]; then
-    # shellcheck disable=SC2088  # a literal ~ in a message, not a path
-    grep -q 'oh-my-zsh.sh' "$HOME/.zshrc" 2>/dev/null \
-      || report_drift "~/.oh-my-zsh installed but .zshrc never sources it." "fix: bash setup-ubuntu.sh"
-    omz_theme=$(grep -m1 '^ZSH_THEME=' "$HOME/.zshrc" 2>/dev/null || true)
-    case "$omz_theme" in
-      ''|'ZSH_THEME=""'*|"ZSH_THEME=''"*) report_ok "oh-my-zsh present, prompt left to starship." ;;
-      *) report_drift "$omz_theme — starship replaces it, so omz renders a prompt that is discarded." \
-           "fix: bash setup-ubuntu.sh (clears ZSH_THEME)" ;;
-    esac
-  elif [[ "$want_omz" == "true" ]]; then
+  if command -v zsh >/dev/null 2>&1 && [[ -f "$HOME/.zshrc" ]]; then
+    probe=$(DISABLE_AUTO_UPDATE=true timeout 30 zsh -ic \
+      'print -r -- "DEVBOX_PROBE|$HISTSIZE|$SAVEHIST|${ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE-}|$+functions[omz]"' \
+      </dev/null 2>/dev/null | grep '^DEVBOX_PROBE|' | tail -1)
+    if [[ -z "$probe" ]]; then
+      report_warn "Could not start an interactive zsh to read its effective settings."
+    else
+      IFS='|' read -r _ have_hist have_save style omz_loaded <<< "$probe"
+      if [[ -n "$want_hist" ]]; then
+        for pair in "HISTSIZE:$have_hist" "SAVEHIST:$have_save"; do
+          var=${pair%%:*}; have=${pair#*:}
+          if [[ -z "$have" || "$have" -lt "$want_hist" ]]; then
+            report_drift "zsh ends up with $var=${have:-unset}, below the expected $want_hist — history is being truncated." \
+              "fix: remove the later $var= from ~/.zshrc, or adopt it by setting SHELL_HISTORY_SIZE in setup-ubuntu.sh"
+          fi
+        done
+      fi
+      case "$style" in
+        ''|fg=8|fg=black|fg=0)
+          report_drift "zsh ends up with ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='${style}' — suggestions are invisible on dark themes." \
+            "fix: bash setup-ubuntu.sh, or remove the later override from ~/.zshrc" ;;
+        *) report_ok "Inline suggestion colour set ($style)." ;;
+      esac
+      if [[ "$want_omz" == "true" && -d "$HOME/.oh-my-zsh" && "$omz_loaded" != "1" ]]; then
+        report_drift "oh-my-zsh is installed but an interactive zsh does not load it." "fix: bash setup-ubuntu.sh"
+      fi
+    fi
+  fi
+  if [[ "$want_omz" == "true" && ! -d "$HOME/.oh-my-zsh" ]] && command -v zsh >/dev/null 2>&1; then
     report_drift "oh-my-zsh missing (setup installs it)." "fix: bash setup-ubuntu.sh"
   fi
 
@@ -262,7 +226,6 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
   if [[ -f "$HOME/.config/starship.toml" ]]; then
     report_ok "starship.toml present."
   else
-    # shellcheck disable=SC2088  # a literal ~ in a message, not a path
     report_drift "~/.config/starship.toml missing." "fix: bash setup-ubuntu.sh"
   fi
 
