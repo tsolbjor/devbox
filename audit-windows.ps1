@@ -601,6 +601,24 @@ if ($Config.CheckConfigFiles) {
     }
   }
 
+  # Default editor: EDITOR/VISUAL user env (git core.editor is checked with the git keys).
+  if ($setup.Editor) {
+    foreach ($name in @("EDITOR", "VISUAL")) {
+      $cur = [Environment]::GetEnvironmentVariable($name, "User")
+      if ($cur -ne $setup.Editor) {
+        Report-Drift "env $name = '$cur' (expected '$($setup.Editor)')." @("fix: .\setup-windows.ps1")
+      }
+    }
+  }
+
+  # yazi's file(1): setup points YAZI_FILE_ONE at Git's file.exe.
+  if (@($setup.CliTools) -contains "sxyazi.yazi") {
+    $yf = [Environment]::GetEnvironmentVariable("YAZI_FILE_ONE", "User")
+    if (-not $yf -or -not (Test-Path $yf)) {
+      Report-Drift "env YAZI_FILE_ONE = '$yf' (expected Git's usr\bin\file.exe) — yazi can't detect mime types." @("fix: .\setup-windows.ps1")
+    }
+  }
+
   # Git global config keys setup manages.
   if ($setup.GitConfig.Configure -and (Test-Command "git")) {
     $gitWant = @{
@@ -614,6 +632,7 @@ if ($Config.CheckConfigFiles) {
       $gitWant["interactive.diffFilter"] = "delta --color-only"
       $gitWant["delta.navigate"]         = "true"
     }
+    if ($setup.Editor) { $gitWant["core.editor"] = $setup.Editor }
     foreach ($k in $gitWant.Keys) {
       $cur = (git config --global --get $k) 2>$null
       if ($cur -ne $gitWant[$k]) {

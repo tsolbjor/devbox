@@ -62,6 +62,11 @@ $Config = @{
   # than as individual Install* switches because they are all plain binaries that
   # work the moment they are on PATH; zoxide and eza are deliberately absent, as
   # both need a managed profile block to be useful.
+  # EDITOR/VISUAL (user env) and git core.editor. Git for Windows' installer writes
+  # its own core.editor into the system config, which outranks the env vars — hence
+  # the global git key too. $null leaves all three alone.
+  Editor = "micro"
+
   CliTools = @(
     "BurntSushi.ripgrep.MSVC",   # rg
     "sharkdp.bat",               # bat
@@ -70,6 +75,8 @@ $Config = @{
     "dandavison.delta",          # git-delta — wired into git by GitConfig.UseDelta
     "JesseDuffield.lazygit",     # lazygit
     "charmbracelet.glow",        # glow — rendered markdown in the terminal
+    "sxyazi.yazi",               # yazi — file manager; YAZI_FILE_ONE points it at Git's file.exe
+    "zyedidia.micro",            # micro — terminal editor with familiar keys
     "GitHub.cli"                 # gh
   )
 
@@ -1303,6 +1310,31 @@ function Set-UserEnvVar {
   Set-Item -Path "Env:$Name" -Value $Value   # current session
 }
 
+# yazi detects mime types with file(1), which Windows lacks; upstream's only
+# recommended source is the one Git for Windows bundles, named via YAZI_FILE_ONE.
+# Runs after the Git install, whose PATH entry this session may not see yet —
+# hence the Program Files fallback.
+function Ensure-YaziFileOne {
+  $roots = @()
+  $git = Get-Command git -ErrorAction SilentlyContinue
+  if ($git) { $roots += Split-Path (Split-Path $git.Source) }   # <root>\cmd\git.exe
+  $roots += Join-Path $env:ProgramFiles "Git"
+  $file = $roots | ForEach-Object { Join-Path $_ "usr\bin\file.exe" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if (-not $file) {
+    Write-Host "⚠ Git's file.exe not found — yazi cannot detect mime types until YAZI_FILE_ONE is set" -ForegroundColor Yellow
+    return
+  }
+  Set-UserEnvVar -Name "YAZI_FILE_ONE" -Value $file
+}
+
+# EDITOR/VISUAL for everything that honours them, plus git's own key.
+function Ensure-DefaultEditor {
+  param([Parameter(Mandatory=$true)][string]$Editor)
+  Set-UserEnvVar -Name "EDITOR" -Value $Editor
+  Set-UserEnvVar -Name "VISUAL" -Value $Editor
+  if (Test-Command "git") { Ensure-GitSetting "core.editor" $Editor }
+}
+
 # Point npm/NuGet caches at the Dev Drive so package restores land on the trusted
 # ReFS volume. See the DevDrivePackageCaches block in PARAMETERS.
 function Ensure-DevDrivePackageCaches {
@@ -1460,6 +1492,8 @@ if ($Config.InstallGit) {
   Install-WingetPackage -Id "Git.Git"
   if ($Config.GitConfig.Configure) { Ensure-WindowsGitConfig -GitConfig $Config.GitConfig }
 }
+if ($Config.CliTools -contains "sxyazi.yazi") { Ensure-YaziFileOne }
+if ($Config.Editor)                 { Ensure-DefaultEditor -Editor $Config.Editor }
 if ($Config.InstallNode)            { Ensure-Node -MajorVersion $Config.NodeMajorVersion -NpmGlobalPrefix $Config.NpmGlobalPrefix -MigrateLegacy $Config.MigrateLegacyNode }
 if ($Config.InstallAzureFunctionsCoreTools) { Install-WingetPackage -Id "Microsoft.Azure.FunctionsCoreTools" }
 if ($Config.InstallAspire)           { Install-WingetPackage -Id "Microsoft.Aspire" }

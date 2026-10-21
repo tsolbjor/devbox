@@ -41,6 +41,8 @@ APT_PACKAGES=(
   fd-find
   fzf
   zsh
+  file      # yazi's mime-type detection
+  micro     # terminal editor with familiar keys (Ctrl+S, Ctrl+Q)
 )
 
 # Optional installs
@@ -64,6 +66,9 @@ INSTALL_DELTA="${INSTALL_DELTA:-true}"              # git-delta: nicer diffs (wi
 INSTALL_LAZYGIT="${INSTALL_LAZYGIT:-true}"          # git TUI
 INSTALL_STERN="${INSTALL_STERN:-true}"              # multi-pod Kubernetes log tailing
 INSTALL_GLOW="${INSTALL_GLOW:-true}"                # rendered markdown in the terminal
+INSTALL_YAZI="${INSTALL_YAZI:-true}"                # terminal file manager (`y` cds to where you quit)
+DEFAULT_EDITOR="${DEFAULT_EDITOR-micro}"            # EDITOR/VISUAL in the shell config (git, yazi, crontab -e);
+                                                    # an EDITOR already exported earlier wins. Empty = leave unset
 INSTALL_ZSH_PLUGINS="${INSTALL_ZSH_PLUGINS:-true}"  # zsh-autosuggestions + zsh-syntax-highlighting
 INSTALL_OMZ="${INSTALL_OMZ:-true}"                  # oh-my-zsh: framework only (completion, git aliases,
                                                     # tab-title support). Starship stays the prompt, so
@@ -831,6 +836,28 @@ ensure_glow() {
   echo "✓ glow ${version} installed"
 }
 
+# The musl build: statically linked, so it runs on any glibc (the devcontainer's
+# 22.04 included). Ships `ya`, yazi's plugin/package manager, alongside — guarded
+# here too, which also tells the audit both binaries belong to setup.
+ensure_yazi() {
+  if ensure_command yazi && ensure_command ya; then
+    echo "✓ yazi already installed"
+    return
+  fi
+  echo "→ Installing yazi (latest)"
+  local version dpkg_arch arch dir tmp
+  version=$(gh_latest_tag sxyazi/yazi)   # e.g. v26.9.1
+  dpkg_arch=$(dpkg --print-architecture)
+  arch=$([ "$dpkg_arch" = "amd64" ] && echo "x86_64" || echo "aarch64")
+  dir="yazi-${arch}-unknown-linux-musl"
+  tmp=$(mktemp -d)
+  curl -fsSL -o "$tmp/yazi.zip" "https://github.com/sxyazi/yazi/releases/download/${version}/${dir}.zip"
+  unzip -q -j "$tmp/yazi.zip" "${dir}/yazi" "${dir}/ya" -d "$tmp"
+  sudo install -m 0755 "$tmp/yazi" "$tmp/ya" /usr/local/bin/
+  rm -rf "$tmp"
+  echo "✓ yazi ${version} installed"
+}
+
 # oh-my-zsh is the zsh *framework* (completion defaults, git aliases, the
 # termsupport hooks that title the tab) — not the prompt. Installed here, loaded by
 # ~/.config/devbox/zshrc with an empty ZSH_THEME, since starship renders the prompt.
@@ -1032,6 +1059,8 @@ ZKEYS
   fi
 
   render_devbox_eza
+  render_devbox_yazi
+  render_devbox_editor
 
   cat <<'ZCWD'
 
@@ -1081,6 +1110,8 @@ BHIST
 
   render_devbox_fzf bash
   render_devbox_eza
+  render_devbox_yazi
+  render_devbox_editor
 
   cat <<'BCWD'
 
@@ -1137,6 +1168,38 @@ if command -v eza >/dev/null 2>&1; then
   alias lt='eza --tree --level=2 --icons=auto'
 fi
 EZA
+}
+
+render_devbox_yazi() {
+  [[ "$INSTALL_YAZI" == "true" ]] || return 0
+  cat <<'YAZI'
+
+# y → yazi, then cd to the directory it was quit in (upstream's shell wrapper).
+# Quit with `q` to follow, `Q` to stay put.
+if command -v yazi >/dev/null 2>&1; then
+  y() {
+    local tmp cwd
+    tmp="$(mktemp -t yazi-cwd.XXXXXX)"
+    yazi "$@" --cwd-file="$tmp"
+    IFS= read -r -d '' cwd < "$tmp"
+    [ -n "$cwd" ] && [ "$cwd" != "$PWD" ] && builtin cd -- "$cwd"
+    rm -f -- "$tmp"
+  }
+fi
+YAZI
+}
+
+# Git reads VISUAL/EDITOR when core.editor is unset, so this also picks the
+# commit-message editor.
+render_devbox_editor() {
+  [[ -n "$DEFAULT_EDITOR" ]] || return 0
+  cat <<EDITOR
+
+# Default editor, unless one was exported before this file.
+if command -v $DEFAULT_EDITOR >/dev/null 2>&1; then
+  export EDITOR="\${EDITOR:-$DEFAULT_EDITOR}" VISUAL="\${VISUAL:-$DEFAULT_EDITOR}"
+fi
+EDITOR
 }
 
 # zoxide, then starship LAST: zoxide hooks in after compinit (which oh-my-zsh ran
@@ -1543,6 +1606,7 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, code dir, shell config
 [[ "$INSTALL_LAZYGIT"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_STERN"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_GLOW"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_YAZI"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_OMZ"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ZSH_PLUGINS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_NODE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -1702,6 +1766,11 @@ fi
 if [[ "$INSTALL_GLOW" == "true" ]]; then
   log "Installing glow"
   ensure_glow
+fi
+
+if [[ "$INSTALL_YAZI" == "true" ]]; then
+  log "Installing yazi"
+  ensure_yazi
 fi
 
 if [[ "$INSTALL_OMZ" == "true" ]]; then
