@@ -2,8 +2,12 @@
 # Rerun-safety test for setup-ubuntu.sh, run as root inside a fresh ubuntu:24.04
 # container with the repo mounted read-only at /src:
 #
-#   docker run --rm -e GITHUB_TOKEN -v "$PWD:/src:ro" ubuntu:24.04 \
+#   docker run --rm -e GITHUB_TOKEN -e DEVBOX_ENV=native -v "$PWD:/src:ro" ubuntu:24.04 \
 #     bash /src/.github/ci/ubuntu-idempotency.sh
+#
+# DEVBOX_ENV picks the path under test: native (what a container detects as) or
+# wsl, forced — /etc/wsl.conf and the WSL-only checks run, while the Windows
+# interop pieces (Git for Windows' GCM, whoami.exe) are absent and only warn.
 #
 # 1. setup-ubuntu.sh on a blank machine, as a normal sudo-capable user
 # 2. setup-ubuntu.sh again — every step must report ✓; any → line means a check
@@ -17,9 +21,10 @@ USER_NAME=dev
 HOME_DIR="/home/$USER_NAME"
 REPO="$HOME_DIR/devbox"
 LOGS="${LOGS:-/tmp/devbox-ci}"
+DEVBOX_ENV="${DEVBOX_ENV:-native}"
 mkdir -p "$LOGS"
 
-echo "::group::Prepare a WSL-like Ubuntu"
+echo "::group::Prepare a blank Ubuntu (DEVBOX_ENV=$DEVBOX_ENV)"
 export DEBIAN_FRONTEND=noninteractive
 # The Docker image is minimized: dpkg skips /usr/share/doc, which the WSL image
 # keeps — and Ubuntu 24.04's fzf 0.44 (too old for `fzf --zsh`) ships its
@@ -47,6 +52,7 @@ as_user() {
   sudo -u "$USER_NAME" -H env \
     DEBIAN_FRONTEND=noninteractive \
     GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+    DEVBOX_ENV="$DEVBOX_ENV" \
     GIT_NAME="CI Runner" GIT_EMAIL="ci@example.com" \
     MIGRATE_LEGACY_NODE=no \
     bash -lc "cd '$REPO' && $1"

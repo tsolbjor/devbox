@@ -1,6 +1,7 @@
 # devbox
 
 Automated, idempotent setup scripts for a Windows + WSL2 development environment.
+The Ubuntu scripts also run on a standalone (native) Ubuntu machine.
 
 > 📄 **New here?** See the [**terminal cheatsheet**](CHEATSHEET.md) for WezTerm, Starship,
 > and CLI-addon keyboard shortcuts and how-tos.
@@ -12,8 +13,8 @@ Automated, idempotent setup scripts for a Windows + WSL2 development environment
 - [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/) (App Installer from the Microsoft Store)
 - PowerShell run as Administrator
 
-**Ubuntu / WSL** (`setup-ubuntu.sh`)
-- Ubuntu 20.04 LTS or later inside WSL2
+**Ubuntu** (`setup-ubuntu.sh`)
+- Ubuntu 20.04 LTS or later — inside WSL2, or native
 - sudo access
 
 ## Quick Start
@@ -62,17 +63,29 @@ Installs and configures:
 | System | Long path support, OpenSSH Agent, Defender exclusion for WSL vhdx |
 | Git | identity (auto-detected from the Entra user unless already set), autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote, delta as the diff pager |
 
-### 2. Ubuntu / WSL
+### 2. Ubuntu (WSL or native)
 
-Inside your WSL Ubuntu terminal:
+Inside your Ubuntu terminal:
 
 ```bash
 bash setup-ubuntu.sh
 ```
 
-Git name/email auto-detect from the logged-in Windows (Entra) user — email from
-the UPN (`whoami.exe /upn`), name from the Windows logon display name. Override
-by exporting them first, or set `AUTO_DETECT_GIT_IDENTITY=false` to disable:
+The script detects where it runs (`DEVBOX_ENV=auto`) and prints it first:
+
+| | WSL | Native Ubuntu |
+|---|---|---|
+| `/etc/wsl.conf` | merged | skipped |
+| Git identity | existing Git config, else the Windows (Entra) user | existing Git config, else `GIT_NAME`/`GIT_EMAIL` required |
+| HTTPS Git auth | Git for Windows' Credential Manager | none set — `gh auth login` covers GitHub |
+| Docker | checks Rancher Desktop's WSL integration | checks any engine answers; installs none |
+
+Force either path with `DEVBOX_ENV=wsl` / `DEVBOX_ENV=native` (a container always detects as native).
+
+Unless the global Git config already has them, Git name/email auto-detect on WSL from
+the logged-in Windows (Entra) user — email from the UPN (`whoami.exe /upn`), name
+from the Windows logon display name. Override by exporting them first (required
+on a fresh native machine), or set `AUTO_DETECT_GIT_IDENTITY=false` to disable:
 
 ```bash
 export GIT_NAME="Your Name"
@@ -91,10 +104,10 @@ Installs and configures:
 | Languages | .NET SDK (10 LTS), Aspire CLI, `dotnet outdated` (NuGet's `ncu`), Python (venv/pip/pipx/uv) |
 | Azure | Azure Developer CLI (`azd`) — provisions and deploys an Aspire AppHost |
 | Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern, kubelogin (Entra auth for AKS) |
-| Containers | verifies Rancher Desktop's docker is wired into WSL |
-| Git | user config (auto-detected from Windows), defaults, SSH commit signing, HTTPS auth via the Windows Git Credential Manager |
+| Containers | verifies docker answers — on WSL, that Rancher Desktop's docker is wired in |
+| Git | user config (on WSL auto-detected from Windows), defaults, SSH commit signing, on WSL HTTPS auth via the Windows Git Credential Manager |
 | SSH | ed25519 key pair |
-| System | /etc/wsl.conf (automount metadata, systemd — merged key by key, other settings kept) |
+| System | on WSL: /etc/wsl.conf (automount metadata, systemd — merged key by key, other settings kept) |
 
 After the script finishes it prints your SSH public key and next steps.
 
@@ -120,7 +133,7 @@ nothing new, only upgrade what's there. Safe to rerun anytime.
 ```
 
 ```bash
-# Ubuntu / WSL: apt upgrade + fnm and the latest Node patch, starship, zoxide,
+# Ubuntu (WSL or native): apt upgrade + fnm and the latest Node patch, starship, zoxide,
 # git-delta, lazygit, stern, glow, k9s, kubectx, npm globals, pipx tools. Use --skip-<tool> to opt out.
 bash update-ubuntu.sh
 ```
@@ -144,7 +157,7 @@ so they can't fall out of sync with what setup actually does.
 ```
 
 ```bash
-# Ubuntu / WSL: expected CLIs, managed rc blocks, starship.toml, /etc/wsl.conf,
+# Ubuntu (WSL or native): expected CLIs, managed rc blocks, starship.toml, /etc/wsl.conf (WSL),
 # Git, default shell, version pins, plus extra snap/pipx/npm/dotnet apps
 bash audit-ubuntu.sh              # add --apt-extras / --local-bin for noisier checks
 ```

@@ -5,17 +5,27 @@ set -euo pipefail
 # PARAMETERS (edit these)
 # =========================
 
+# Where this Ubuntu runs, which decides the Windows-facing steps:
+#   wsl    — inside WSL2 on a Windows host set up by setup-windows.ps1: /etc/wsl.conf,
+#            Git for Windows' Credential Manager, Git identity from the Windows (Entra)
+#            user, docker from Rancher Desktop's WSL integration
+#   native — a standalone Ubuntu machine (or a container): none of the above
+#   auto   — detect it (WSL_DISTRO_NAME or /run/WSL; a container on a WSL host is native)
+# The settings below marked `auto` follow it; set them to true/false to override.
+DEVBOX_ENV="${DEVBOX_ENV:-auto}"
+
 GIT_NAME="${GIT_NAME:-}"
 GIT_EMAIL="${GIT_EMAIL:-}"
 
-# When GIT_NAME/GIT_EMAIL are empty and we're inside WSL, try to derive them from the
-# logged-in Windows (Entra) user via interop. Explicitly-set env vars always win.
+# When GIT_NAME/GIT_EMAIL are empty they are taken from the existing global Git
+# config, then — on WSL only — derived from the logged-in Windows (Entra) user via
+# interop. Explicitly-set env vars always win.
 AUTO_DETECT_GIT_IDENTITY="${AUTO_DETECT_GIT_IDENTITY:-true}"
 
-# Where you keep repos inside WSL
+# Where you keep repos
 CODE_DIR="${CODE_DIR:-$HOME/code}"
 
-# Base packages installed in WSL (keep this minimal if you rely on devcontainers)
+# Base packages (keep this minimal if you rely on devcontainers)
 APT_PACKAGES=(
   ca-certificates
   curl
@@ -94,7 +104,7 @@ MIGRATE_LEGACY_NODE="${MIGRATE_LEGACY_NODE:-ask}"      # ask | yes | no — move
 # the other globals.
 INSTALL_CLAUDE_CODE="${INSTALL_CLAUDE_CODE:-true}"   # `claude` — native install, self-updating
 INSTALL_CODEX="${INSTALL_CODEX:-true}"               # `codex`  — @openai/codex
-CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-true}"   # set false on native Linux (not WSL)
+CONFIGURE_WSL_CONF="${CONFIGURE_WSL_CONF:-auto}"   # merge /etc/wsl.conf — auto: on WSL only
 WSL_ENABLE_SYSTEMD="${WSL_ENABLE_SYSTEMD:-true}"   # requires Windows 11 22H2+ / WSL 2.0
 SET_ZSH_DEFAULT="${SET_ZSH_DEFAULT:-true}"
 SET_GIT_DEFAULTS="${SET_GIT_DEFAULTS:-true}"
@@ -106,14 +116,14 @@ INSTALL_ASPIRE="${INSTALL_ASPIRE:-true}"          # `aspire` CLI from aspire.dev
 INSTALL_AZD="${INSTALL_AZD:-true}"                # `azd` — Azure Developer CLI; provisions and deploys an Aspire AppHost
 INSTALL_DOTNET_TOOLS="${INSTALL_DOTNET_TOOLS:-true}"  # .NET global tools (dotnet-outdated — the NuGet counterpart to ncu)
 INSTALL_PYTHON="${INSTALL_PYTHON:-true}"          # python3 venv/pip + pipx + uv
-DOCKER_CHECK="${DOCKER_CHECK:-true}"              # verify Rancher Desktop's docker is wired into WSL
+DOCKER_CHECK="${DOCKER_CHECK:-true}"              # verify docker answers (on WSL: Rancher Desktop's integration)
 GIT_SIGN_COMMITS="${GIT_SIGN_COMMITS:-true}"      # SSH-sign commits/tags with the generated key
-USE_WINDOWS_GCM="${USE_WINDOWS_GCM:-true}"        # HTTPS git auth via Git for Windows' Credential Manager
-                                                  # (Entra/browser sign-in; Azure DevOps and GitHub)
+USE_WINDOWS_GCM="${USE_WINDOWS_GCM:-auto}"        # HTTPS git auth via Git for Windows' Credential Manager
+                                                  # (Entra/browser sign-in; Azure DevOps and GitHub) — auto: on WSL only
 
 # Git defaults
 GIT_DEFAULT_BRANCH="${GIT_DEFAULT_BRANCH:-main}"
-GIT_AUTOCRLF="${GIT_AUTOCRLF:-input}"             # best default for WSL
+GIT_AUTOCRLF="${GIT_AUTOCRLF:-input}"             # LF in the repo; also right on WSL next to Windows checkouts
 SSH_KEY_TYPE="${SSH_KEY_TYPE:-ed25519}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/id_ed25519}"
 
@@ -171,10 +181,41 @@ win_strip() {
   tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -n1
 }
 
+# Resolves DEVBOX_ENV=auto to wsl or native, then every `auto` setting that follows
+# it. WSL_DISTRO_NAME is set in every WSL session but dropped by sudo; /run/WSL is
+# there either way. Neither reaches a container, whose kernel string still says
+# "microsoft" on a WSL host — which is why /proc/version is not the test.
+detect_devbox_env() {
+  case "$DEVBOX_ENV" in
+    wsl|native) ;;
+    auto)
+      if [[ -n "${WSL_DISTRO_NAME:-}" || -d /run/WSL ]]; then DEVBOX_ENV=wsl; else DEVBOX_ENV=native; fi ;;
+    *) echo "ERROR: DEVBOX_ENV must be auto, wsl or native (got '$DEVBOX_ENV')." >&2; exit 1 ;;
+  esac
+  resolve_auto CONFIGURE_WSL_CONF
+  resolve_auto USE_WINDOWS_GCM
+}
+
+on_wsl() { [[ "$DEVBOX_ENV" == "wsl" ]]; }
+
+# `auto` → true on WSL, false on native; an explicit true/false is left alone.
+resolve_auto() {
+  local -n setting="$1"
+  [[ "$setting" == "auto" ]] || return 0
+  if on_wsl; then setting=true; else setting=false; fi
+}
+
+# An identity already in the global Git config wins over detection, as on Windows
+# (Ensure-GitIdentity): a rerun never swaps a name you set for a detected one.
+existing_git_identity() {
+  [[ -n "$GIT_NAME" ]]  || GIT_NAME="$(git config --global --get user.name 2>/dev/null || true)"
+  [[ -n "$GIT_EMAIL" ]] || GIT_EMAIL="$(git config --global --get user.email 2>/dev/null || true)"
+}
+
 detect_windows_git_identity() {
   [[ "$AUTO_DETECT_GIT_IDENTITY" == "true" ]] || return 0
   # Only meaningful on WSL, where Windows interop binaries are on PATH.
-  grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null || return 0
+  on_wsl || return 0
 
   if [[ -z "$GIT_EMAIL" ]] && ensure_command whoami.exe; then
     local upn
@@ -1413,14 +1454,22 @@ ensure_python() {
   fi
 }
 
+# Setup installs no docker engine either way. On WSL it comes from Rancher Desktop's
+# integration (setup-windows.ps1); on a native machine it is your choice of engine.
 docker_check() {
   if ensure_command docker && docker version >/dev/null 2>&1; then
-    echo "✓ docker reachable from WSL ($(docker version --format '{{.Client.Version}}' 2>/dev/null))"
+    echo "✓ docker reachable ($(docker version --format '{{.Client.Version}}' 2>/dev/null))"
   elif ensure_command docker; then
-    echo "⚠ docker CLI present but daemon not reachable. Start Rancher Desktop (moby engine)."
-  else
+    if on_wsl; then
+      echo "⚠ docker CLI present but daemon not reachable. Start Rancher Desktop (moby engine)."
+    else
+      echo "⚠ docker CLI present but daemon not reachable. Start it (sudo systemctl start docker), or check you are in the 'docker' group."
+    fi
+  elif on_wsl; then
     echo "⚠ docker not found in WSL."
     echo "  In Rancher Desktop: Preferences → WSL → Integrations → enable '$(. /etc/os-release && echo "$NAME")' (this distro)."
+  else
+    echo "⚠ docker not found. Install Docker Engine (https://docs.docker.com/engine/install/ubuntu/) or Rancher Desktop for Linux."
   fi
 }
 
@@ -1445,20 +1494,32 @@ if [[ "${1:-}" == "--render-rc" ]]; then
   exit
 fi
 
+detect_devbox_env
+# `--detect-env` prints wsl or native and exits: audit-ubuntu.sh asks here rather
+# than keep a second copy of the detection.
+if [[ "${1:-}" == "--detect-env" ]]; then
+  echo "$DEVBOX_ENV"
+  exit
+fi
+if on_wsl; then echo "Environment: WSL"; else echo "Environment: native Ubuntu (DEVBOX_ENV=wsl to override)"; fi
+
 # Tools this run installs into ~/.local/bin must be found by its own later checks
 # (and by pipx ensurepath, which would otherwise append a PATH line to the rc files).
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 
 # Validate required parameters
 if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
+  existing_git_identity
   detect_windows_git_identity
+  if on_wsl; then not_found="not in the global Git config, and could not be detected from Windows"
+  else not_found="not in the global Git config"; fi
   if [[ -z "$GIT_NAME" ]]; then
-    echo "ERROR: GIT_NAME is not set and could not be detected from Windows." >&2
+    echo "ERROR: GIT_NAME is not set ($not_found)." >&2
     echo "Set it explicitly: export GIT_NAME='Your Name'" >&2
     exit 1
   fi
   if [[ -z "$GIT_EMAIL" ]]; then
-    echo "ERROR: GIT_EMAIL is not set and could not be detected from Windows." >&2
+    echo "ERROR: GIT_EMAIL is not set ($not_found)." >&2
     echo "Set it explicitly: export GIT_EMAIL='your.email@example.com'" >&2
     exit 1
   fi
@@ -1553,7 +1614,7 @@ if [[ "$SET_GIT_DEFAULTS" == "true" ]]; then
   ensure_git_config "pull.rebase" "false"
   ensure_git_config "push.autoSetupRemote" "true"
   ensure_git_safe_directory "$CODE_DIR"
-  if [[ "$USE_WINDOWS_GCM" == "true" ]] && grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then
+  if [[ "$USE_WINDOWS_GCM" == "true" ]]; then
     ensure_git_credential_manager
   fi
 fi
@@ -1689,7 +1750,7 @@ if [[ "$INSTALL_PYTHON" == "true" ]]; then
 fi
 
 if [[ "$DOCKER_CHECK" == "true" ]]; then
-  log "Checking docker (Rancher Desktop WSL integration)"
+  if on_wsl; then log "Checking docker (Rancher Desktop WSL integration)"; else log "Checking docker"; fi
   docker_check
 fi
 

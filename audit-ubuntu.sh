@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2088  # report messages show ~ paths as text, never expand them
-# Read-only DRIFT AUDIT for the WSL/Ubuntu side. Compares the current machine
+# Read-only DRIFT AUDIT for the Ubuntu side (WSL or native — setup-ubuntu.sh
+# --detect-env decides, honouring DEVBOX_ENV). Compares the current machine
 # against what setup-ubuntu.sh / update-ubuntu.sh install and configure, and
 # reports where they diverge. It changes NOTHING — every finding carries a
 # two-way reconcile hint: how to fix the drift, and (for unexpected apps) how to
@@ -24,7 +25,7 @@ CHECK_CLIS="${CHECK_CLIS:-true}"        # expected CLIs present?
 CHECK_CONFIG="${CHECK_CONFIG:-true}"    # rc blocks, starship.toml, wsl.conf, git, shell
 CHECK_EXTRAS="${CHECK_EXTRAS:-true}"    # snap / pipx / npm / dotnet globals not in setup
 CHECK_SERVICES="${CHECK_SERVICES:-true}" # systemd running-state + startup inventory (enabled units, crontab)
-CHECK_DOCKER="${CHECK_DOCKER:-true}"    # Rancher Desktop is the intended docker engine — flag shadow apt/snap engines
+CHECK_DOCKER="${CHECK_DOCKER:-true}"    # on WSL: Rancher Desktop is the intended engine — flag shadow apt/snap engines
 CHECK_PINS="${CHECK_PINS:-true}"        # installed major versions vs the version pins in setup-ubuntu.sh
 APT_EXTRAS=false                        # --apt-extras: list manual apt pkgs not in setup (noisy: includes base)
 LOCAL_BIN=false                         # --local-bin: list /usr/local/bin binaries not in setup
@@ -80,7 +81,11 @@ report_drift() {
 
 [[ -f "$SETUP" ]] || { echo "setup script not found: $SETUP" >&2; exit 1; }
 
-echo "devbox drift audit (Ubuntu/WSL)"
+# wsl or native, resolved by setup's own detection so the two can never disagree
+DEVBOX_ENV="$(bash "$SETUP" --detect-env)" || exit 1
+on_wsl() { [[ "$DEVBOX_ENV" == "wsl" ]]; }
+
+if on_wsl; then echo "devbox drift audit (Ubuntu on WSL)"; else echo "devbox drift audit (native Ubuntu)"; fi
 echo "Comparing this machine against $(basename "$SETUP") + update-ubuntu.sh"
 
 # ---- parse expected sets ----
@@ -229,13 +234,13 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
     report_drift "~/.config/starship.toml missing." "fix: bash setup-ubuntu.sh"
   fi
 
-  # /etc/wsl.conf
-  if [[ -f /etc/wsl.conf ]]; then
+  # /etc/wsl.conf — setup merges it on WSL only (CONFIGURE_WSL_CONF=auto)
+  if on_wsl && [[ -f /etc/wsl.conf ]]; then
     grep -qE 'options[[:space:]]*=[[:space:]]*metadata' /etc/wsl.conf \
       || report_drift "/etc/wsl.conf missing 'options = metadata'." "fix: bash setup-ubuntu.sh"
     grep -qE 'systemd[[:space:]]*=[[:space:]]*true' /etc/wsl.conf \
       || report_warn "/etc/wsl.conf has no 'systemd = true' (expected unless WSL_ENABLE_SYSTEMD=false)."
-  else
+  elif on_wsl; then
     report_drift "/etc/wsl.conf missing." "fix: bash setup-ubuntu.sh"
   fi
 
@@ -257,7 +262,7 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
     # HTTPS auth via the Windows Git Credential Manager (ensure_git_credential_manager),
     # checked only where setup would have wired it: on WSL, with Git for Windows present.
     gcm="/mnt/c/Program Files/Git/mingw64/bin/git-credential-manager.exe"
-    if grep -q '^USE_WINDOWS_GCM="${USE_WINDOWS_GCM:-true}"' "$SETUP" && [[ -x "$gcm" ]]; then
+    if on_wsl && grep -qE '^USE_WINDOWS_GCM="\$\{USE_WINDOWS_GCM:-(auto|true)\}"' "$SETUP" && [[ -x "$gcm" ]]; then
       helper=$(git config --global --get credential.helper 2>/dev/null)
       if [[ "$helper" != "${gcm// /\\ }" ]]; then
         report_drift "git credential.helper is '${helper:-unset}', not the Windows Git Credential Manager." \
@@ -329,7 +334,8 @@ if [[ "$CHECK_SERVICES" == "true" ]]; then
     case "$state" in
       running)  report_ok "systemd is running." ;;
       degraded) report_warn "systemd running but degraded — 'systemctl --failed' to inspect." ;;
-      "")       report_warn "systemd not managing this session (WSL_ENABLE_SYSTEMD=false?)." ;;
+      "")       if on_wsl; then report_warn "systemd not managing this session (WSL_ENABLE_SYSTEMD=false?)."
+                else report_warn "systemd not managing this session."; fi ;;
       *)        report_warn "systemd state: $state." ;;
     esac
 
@@ -366,13 +372,25 @@ if [[ "$CHECK_SERVICES" == "true" ]]; then
 fi
 
 # ---------- docker engine ----------
-# setup-ubuntu.sh installs NO docker on the Linux side — Rancher Desktop (moby)
+# On WSL, setup-ubuntu.sh installs NO docker on the Linux side — Rancher Desktop (moby)
 # injects the CLI + socket via its WSL integration. A rival apt docker-ce or snap
 # docker ships its own dockerd that grabs /var/run/docker.sock ahead of Rancher,
 # so the shell silently talks to the wrong engine. The generic services check
 # misses this: those daemons sit at preset=enabled, and it never inspects which
 # engine owns the socket. This section does.
-if [[ "$CHECK_DOCKER" == "true" ]]; then
+#
+# On a native machine there is no Rancher to shadow: docker-ce is the ordinary
+# engine there, so only reachability is reported, never counted as drift.
+if [[ "$CHECK_DOCKER" == "true" ]] && ! on_wsl; then
+  section "Docker engine"
+  if ! command -v docker >/dev/null 2>&1; then
+    report_warn "docker CLI not found — install Docker Engine or Rancher Desktop for Linux if you need containers."
+  elif os=$(docker info --format '{{.OperatingSystem}}' 2>/dev/null) && [[ -n "$os" ]]; then
+    report_ok "docker daemon answers ($os)."
+  else
+    report_warn "docker CLI present ($(command -v docker)) but the daemon is not reachable."
+  fi
+elif [[ "$CHECK_DOCKER" == "true" ]]; then
   section "Docker engine (Rancher Desktop)"
 
   # Shadow engines — any of these is drift that fights Rancher for the socket.

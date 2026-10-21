@@ -42,22 +42,29 @@ jobs:
   # rather than the runner itself: the runner image ships kubectl, helm, node,
   # dotnet, … preinstalled, and every ensure_* would short-circuit past the code
   # under test. Reproduce locally with the docker command in the harness header.
+  # Both environments setup-ubuntu.sh knows: native, and WSL forced inside the
+  # container (which would otherwise detect as native).
   ubuntu-idempotency:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        devbox_env: [native, wsl]
     steps:
       - uses: actions/checkout@v5
       - name: setup twice, then audit
         env:
           GITHUB_TOKEN: ${{ github.token }}   # release lookups: the anonymous API limit is per IP
+          DEVBOX_ENV: ${{ matrix.devbox_env }}
         run: |
           mkdir -p logs
-          docker run --rm -e GITHUB_TOKEN -e LOGS=/logs \
+          docker run --rm -e GITHUB_TOKEN -e DEVBOX_ENV -e LOGS=/logs \
             -v "$PWD:/src:ro" -v "$PWD/logs:/logs" \
             ubuntu:24.04 bash /src/.github/ci/ubuntu-idempotency.sh
       - name: Upload run logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ubuntu-idempotency-logs
+          name: ubuntu-idempotency-logs-${{ matrix.devbox_env }}
           path: logs/
