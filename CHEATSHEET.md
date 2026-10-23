@@ -20,8 +20,14 @@ The `+` button dropdown in the tab bar lists these, and the keys spawn them dire
 | `Ctrl+Shift+1` | **pwsh** (starts in `D:\code`) |
 | `Ctrl+Shift+2` | **Ubuntu** (WSL) |
 | `Ctrl+Shift+L` | **Launcher menu** (pick any of the above) |
+| `Ctrl+Shift+3` | **Dev layout** — new tab in the current pane's shell and folder: Claude Code left, yazi top right, a shell bottom right |
 
 New tabs/windows open **Ubuntu** by default (that's the default domain).
+
+The dev layout types `claude` and `yazi` into ordinary shells, so quitting either leaves
+a shell in that pane. Start it from the folder you want — it follows the pane you're in,
+Ubuntu or pwsh. Change the commands with `DevLayoutAgent` / `DevLayoutFiles` in the
+`WezTermConfig` block of `setup-windows.ps1`.
 
 ### Tabs & windows
 

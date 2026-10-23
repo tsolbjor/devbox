@@ -520,6 +520,9 @@ if ($Config.CheckConfigFiles) {
           $checks += @{ Name = "default_prog=pwsh"; Want = "pwsh"; Pattern = "config\.default_prog\s*=\s*\{\s*'pwsh\.exe'" }
         }
         $checks += @{ Name = "directional splits"; Want = "SplitPane"; Pattern = "SplitPane\s*\{\s*direction\s*=\s*'Left'" }
+        $checks += @{ Name = "dev layout"; Want = "Ctrl+Shift+3"; Pattern = "action_callback\(dev_layout\)" }
+        $checks += @{ Name = "dev layout agent"; Want = $wt.DevLayoutAgent; Pattern = "agent:send_text\('$([regex]::Escape($wt.DevLayoutAgent))" }
+        $checks += @{ Name = "dev layout files"; Want = $wt.DevLayoutFiles; Pattern = "files:send_text\('$([regex]::Escape($wt.DevLayoutFiles))" }
 
         $bad = @($checks | Where-Object { $lua -notmatch $_.Pattern })
         if ($bad) {

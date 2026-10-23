@@ -56,7 +56,7 @@ Installs and configures:
 | VS Code | Remote WSL, Dev Containers, Docker extensions |
 | WSL | Ubuntu distro, resource limits (75% RAM/CPU), mirrored networking, swap disabled when allocated RAM ≥ 16 GB |
 | Rancher Desktop | moby engine (Docker-compatible), Kubernetes enabled |
-| WezTerm | JetBrains Mono Nerd Font, One Half Dark scheme, bar cursor, bell off; opens Ubuntu by default; local panes run pwsh (not cmd); Ctrl+Shift+1/2 switch pwsh (D:\code) / Ubuntu; Ctrl+Shift+Alt+arrows split in any direction, inheriting the pane's shell and directory |
+| WezTerm | JetBrains Mono Nerd Font, One Half Dark scheme, bar cursor, bell off; opens Ubuntu by default; local panes run pwsh (not cmd); Ctrl+Shift+1/2 switch pwsh (D:\code) / Ubuntu; Ctrl+Shift+3 opens a dev-layout tab (Claude Code \| yazi / shell) in the current directory; Ctrl+Shift+Alt+arrows split in any direction, inheriting the pane's shell and directory |
 | PowerShell prompt | Starship (nerd-font-symbols preset) for PS5 and PS7 |
 | PowerShell UX | fzf + PSFzf (Ctrl+T / Ctrl+R), PSReadLine predictive IntelliSense (ListView) |
 | Package caches | npm + NuGet caches relocated onto the `D:` Dev Drive (per-user env vars) |

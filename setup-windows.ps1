@@ -120,6 +120,10 @@ $Config = @{
     # spawn pwsh / Ubuntu directly. Ctrl+Shift+L opens the launcher menu.
     # Splits are Ctrl+Shift+Alt+<arrow> and inherit the pane's domain and cwd.
     PwshStartDir       = "D:\code"       # pwsh (Ctrl+Shift+1) opens here
+    # Dev layout (Ctrl+Shift+3): a new tab in the current pane's shell and directory,
+    # agent on the left, file manager top right, plain shell bottom right.
+    DevLayoutAgent     = "claude"
+    DevLayoutFiles     = "yazi"
   }
 
   # WSL / Ubuntu
@@ -801,6 +805,38 @@ end)
 '@
   }
 
+  # Typed into ordinary shells rather than run as the pane's program, so quitting
+  # claude or yazi leaves its shell open instead of closing the pane. The command
+  # strings land inside Lua single quotes, hence the escaping.
+  $agentLua = $WtConfig.DevLayoutAgent -replace '\\', '\\' -replace "'", "\'"
+  $filesLua = $WtConfig.DevLayoutFiles -replace '\\', '\\' -replace "'", "\'"
+  $devLayoutLua = @"
+-- Dev layout (Ctrl+Shift+3): a new tab in the current pane's domain and
+-- directory, split into the agent (left), a file manager (top right) and a
+-- plain shell (bottom right).
+local function layout_cwd(pane)
+  local cwd = pane:get_current_working_dir()
+  if not cwd then return nil end
+  local path = type(cwd) == 'string' and (cwd:gsub('^file://[^/]*', '')) or cwd.file_path
+  if not path or path == '' then return nil end
+  if pane:get_domain_name() == 'local' then
+    return (path:gsub('^/(%a:)', '%1'))         -- /D:/code -> D:/code
+  end
+  if path:match('^/?%a:') then return nil end    -- wsl.exe's own cwd, not the shell's
+  return path
+end
+
+local function dev_layout(window, pane)
+  local cwd = layout_cwd(pane)
+  local _, agent = window:mux_window():spawn_tab { domain = { DomainName = pane:get_domain_name() }, cwd = cwd }
+  local files = agent:split { direction = 'Right', size = 0.5, cwd = cwd }
+  files:split { direction = 'Bottom', size = 0.35, cwd = cwd }
+  agent:send_text('$agentLua\r')
+  files:send_text('$filesLua\r')
+  agent:activate()
+end
+"@
+
   $lua = @"
 -- Managed by devbox setup-windows.ps1 — edits here are overwritten on rerun.
 -- To customise permanently, change the WezTermConfig block in setup-windows.ps1.
@@ -822,6 +858,8 @@ config.tab_max_width = $($WtConfig.TabMaxWidth)
 $defaultProgLine
 
 $tabTitleLua
+
+$devLayoutLua
 
 -- On launch, open two tabs: Ubuntu (default WSL domain) + a Windows pwsh tab.
 -- Swap window:spawn_tab for a split pane by replacing it with the SplitPane action.
@@ -848,6 +886,7 @@ config.keys = {
   { key = '1', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab { args = { 'pwsh.exe' }, cwd = '$pwshDirLua', domain = { DomainName = 'local' } } },
   { key = '2', mods = 'CTRL|SHIFT', action = act.SpawnTab { DomainName = 'WSL:$WslDistro' } },
   { key = 'l', mods = 'CTRL|SHIFT', action = act.ShowLauncher },
+  { key = '3', mods = 'CTRL|SHIFT', action = wezterm.action_callback(dev_layout) },
 
   -- Splits: Ctrl+Shift+Alt+<arrow>, in every direction. SplitPane takes a
   -- direction, unlike the legacy SplitHorizontal/SplitVertical actions that can
