@@ -67,13 +67,17 @@ INSTALL_LAZYGIT="${INSTALL_LAZYGIT:-true}"          # git TUI
 INSTALL_STERN="${INSTALL_STERN:-true}"              # multi-pod Kubernetes log tailing
 INSTALL_GLOW="${INSTALL_GLOW:-true}"                # rendered markdown in the terminal
 INSTALL_YAZI="${INSTALL_YAZI:-true}"                # terminal file manager (`y` cds to where you quit)
+INSTALL_ATUIN="${INSTALL_ATUIN:-true}"              # zsh history in SQLite with cwd/repo: Ctrl+R picker and
+                                                    # ghost text that prefer this directory, then this repo
 DEFAULT_EDITOR="${DEFAULT_EDITOR-micro}"            # EDITOR/VISUAL in the shell config (git, yazi, crontab -e);
                                                     # an EDITOR already exported earlier wins. Empty = leave unset
 INSTALL_ZSH_PLUGINS="${INSTALL_ZSH_PLUGINS:-true}"  # zsh-autosuggestions + zsh-syntax-highlighting
 INSTALL_OMZ="${INSTALL_OMZ:-true}"                  # oh-my-zsh: framework only (completion, git aliases,
                                                     # tab-title support). Starship stays the prompt, so
                                                     # ZSH_THEME is forced empty — see ensure_omz.
-OMZ_PLUGINS="${OMZ_PLUGINS:-git zsh-autosuggestions zsh-syntax-highlighting}"
+OMZ_PLUGINS="${OMZ_PLUGINS:-git fzf-tab zsh-autosuggestions zsh-syntax-highlighting}"
+# fzf-tab replaces the Tab completion menu with fzf (fuzzy filter + preview). It has to
+# load after compinit but before the plugins that wrap widgets, hence its place above.
 # Plugins omz loads from its own custom/plugins clones (upstream tracks newer than apt —
 # the apt zsh-autosuggestions is 0.7.0 and suggests less). Cloned by ensure_omz, pulled by
 # update-ubuntu.sh. ensure_zsh_plugins falls back to the apt packages when a clone is
@@ -81,6 +85,7 @@ OMZ_PLUGINS="${OMZ_PLUGINS:-git zsh-autosuggestions zsh-syntax-highlighting}"
 OMZ_CUSTOM_PLUGINS=(
   "zsh-autosuggestions https://github.com/zsh-users/zsh-autosuggestions"
   "zsh-syntax-highlighting https://github.com/zsh-users/zsh-syntax-highlighting"
+  "fzf-tab https://github.com/Aloxaf/fzf-tab"
 )
 
 # Shell history + inline suggestion UX (the zsh counterpart of the Windows
@@ -858,6 +863,61 @@ ensure_yazi() {
   echo "✓ yazi ${version} installed"
 }
 
+# atuin: shell history in SQLite. Installs the binary, writes a starting config once
+# (never over one that exists — it is the user's to edit), and imports ~/.zsh_history
+# once, while atuin has no history database yet. Its shell init lives in
+# ~/.config/devbox/zshrc. Current releases keep both under ~/.atuin; older ones used
+# ~/.config/atuin + ~/.local/share/atuin, which count as existing too. Both checks
+# look at the files rather than ask atuin: any atuin command (even `atuin info`)
+# writes a default config and an empty database first, hiding a fresh install.
+ensure_atuin() {
+  if ensure_command atuin; then
+    echo "✓ atuin already installed"
+  else
+    echo "→ Installing atuin (latest)"
+    local version dpkg_arch arch dir
+    version=$(gh_latest_tag atuinsh/atuin)   # e.g. v18.24.3
+    dpkg_arch=$(dpkg --print-architecture)
+    arch=$([ "$dpkg_arch" = "amd64" ] && echo "x86_64" || echo "aarch64")
+    dir="atuin-${arch}-unknown-linux-musl"
+    curl -fsSL "https://github.com/atuinsh/atuin/releases/download/${version}/${dir}.tar.gz" \
+      | sudo tar -xz --strip-components=1 -C /usr/local/bin "${dir}/atuin"
+    echo "✓ atuin ${version} installed"
+  fi
+
+  local config="${ATUIN_CONFIG_DIR:-$HOME/.atuin}/config.toml"
+  local legacy_config="${XDG_CONFIG_HOME:-$HOME/.config}/atuin/config.toml"
+  local db="$HOME/.atuin/data/history.db"
+  local legacy_db="${XDG_DATA_HOME:-$HOME/.local/share}/atuin/history.db"
+
+  if [[ -f "$config" || -f "$legacy_config" ]]; then
+    echo "✓ atuin config already present"
+  else
+    echo "→ Writing atuin config: $config"
+    mkdir -p "$(dirname "$config")"
+    cat >"$config" <<'TOML'
+# Written once by devbox setup-ubuntu.sh — edit freely, reruns never overwrite it.
+# Every option with its default: atuin default-config
+update_check = false   # update-ubuntu.sh updates atuin
+style = "compact"
+inline_height = 20     # open under the prompt instead of full screen
+
+[search]
+# Ctrl+R opens on this Git repo (this directory outside one); Ctrl+R again cycles.
+filters = ["workspace", "directory", "global", "host", "session"]
+TOML
+  fi
+
+  if [[ -f "$db" || -f "$legacy_db" ]]; then
+    echo "✓ atuin history database present"
+  elif [[ -s "$HOME/.zsh_history" ]]; then
+    echo "→ Importing ~/.zsh_history into atuin (no directories: zsh never recorded them)"
+    atuin import zsh </dev/null >/dev/null
+  else
+    echo "✓ no zsh history to import into atuin"
+  fi
+}
+
 # oh-my-zsh is the zsh *framework* (completion defaults, git aliases, the
 # termsupport hooks that title the tab) — not the prompt. Installed here, loaded by
 # ~/.config/devbox/zshrc with an empty ZSH_THEME, since starship renders the prompt.
@@ -970,7 +1030,7 @@ render_devbox_zsh_body() {
 # of its settings only at load time. The stock fg=8 is invisible on the dark themes
 # this repo configures.
 ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='$ZSH_AUTOSUGGEST_COLOR'
-ZSH_AUTOSUGGEST_STRATEGY=(history completion)   # fall back to completion when history has no match
+ZSH_AUTOSUGGEST_STRATEGY=(history completion)   # atuin's strategies go in front when it is installed (below)
 ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE=40              # stop suggesting on very long lines (latency)
 ZAUTO
   fi
@@ -992,6 +1052,7 @@ OMZ
     cat <<'OMZ'
   plugins=(${plugins:|_devbox_plugins})
   for _p in $_devbox_plugins; do
+    [[ $_p == fzf-tab ]] && (( ! $+commands[fzf] )) && continue   # Tab would call a missing fzf
     [[ -d "$ZSH/plugins/$_p" || -d "${ZSH_CUSTOM:-$ZSH/custom}/plugins/$_p" ]] && plugins+=("$_p")
   done
   unset _p _devbox_plugins
@@ -1009,6 +1070,28 @@ if (( ! ${plugins[(Ie)zsh-autosuggestions]:-0} )) \
   source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
 fi
 ZAPT
+  fi
+
+  if [[ "$INSTALL_OMZ" == "true" ]]; then
+    cat <<'ZTAB'
+
+# fzf-tab: Tab opens completions in fzf — AFTER oh-my-zsh, whose lib/completion.zsh
+# sets menu select, which fzf-tab needs off. Typing filters, < and > switch between
+# groups (files / options / commands), and the right pane previews the candidate.
+if (( ${+functions[enable-fzf-tab]} )); then
+  zstyle ':completion:*' menu no
+  zstyle ':completion:*:*:*:*:*' menu no              # omz's own, more specific, pattern
+  zstyle ':completion:*:descriptions' format '[%d]'   # group headers fzf-tab switches on
+  zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
+  zstyle ':completion:*:git-checkout:*' sort false    # keep git's own (recency) order
+  zstyle ':fzf-tab:*' switch-group '<' '>'
+  if (( $+commands[eza] )); then
+    zstyle ':fzf-tab:complete:(cd|__zoxide_z):*' fzf-preview 'eza -1 --color=always --icons $realpath'
+  else
+    zstyle ':fzf-tab:complete:(cd|__zoxide_z):*' fzf-preview 'ls -1 --color=always $realpath'
+  fi
+fi
+ZTAB
   fi
 
   if [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]]; then
@@ -1032,30 +1115,44 @@ ZHIST
   if [[ "$CONFIGURE_SHELL_HISTORY" == "true" ]]; then
     cat <<'ZKEYS'
 
-# Suggestion keys — AFTER fzf, which binds ^I (Tab) to fzf-completion when it
-# loads. Mirrors PSReadLine on Windows: → accepts the whole suggestion, Ctrl+→ one
-# word, Ctrl+R lists the history. Bound only when the widget exists: binding the
-# Right arrow to a missing widget would break plain cursor movement.
+# Suggestion keys. Mirrors PSReadLine on Windows: → accepts the whole suggestion,
+# Ctrl+→ one word, Ctrl+R lists the history. Tab is left to completion: fzf's
+# ** completion takes it and hands everything else to fzf-tab. Bound only when the
+# widget exists: binding the Right arrow to a missing widget would break plain
+# cursor movement.
 if (( ${+widgets[autosuggest-accept]} )); then
   bindkey '^[[C' autosuggest-accept   # Right arrow: accept the whole suggestion
   bindkey '^ '   autosuggest-accept   # Ctrl+Space: accept (Right arrow is taken mid-line)
 fi
 bindkey '^[[1;5C' forward-word        # Ctrl+Right: accept one word of it
-# Tab: take the ghost suggestion when one is showing, otherwise complete as usual.
-_devbox_tab_accept_or_complete() {
-  if [[ -n "$POSTDISPLAY" ]]; then
-    zle autosuggest-accept
-  elif (( ${+widgets[fzf-completion]} )); then
-    zle fzf-completion
-  else
-    zle expand-or-complete
-  fi
-}
-zle -N _devbox_tab_accept_or_complete
-bindkey '^I' _devbox_tab_accept_or_complete
-# Ctrl+R history picker — the closest thing zsh has to PSReadLine's ListView.
+# Ctrl+R history picker when atuin is absent — the closest thing to PSReadLine's ListView.
 export FZF_CTRL_R_OPTS="--height=45% --layout=reverse --border --info=inline --prompt='history > '"
 ZKEYS
+  fi
+
+  if [[ "$INSTALL_ATUIN" == "true" ]]; then
+    cat <<'ZATUIN'
+
+# atuin keeps every command with its directory, Git repo, exit code and duration.
+# AFTER fzf, so atuin's Ctrl+R picker replaces fzf's (it opens on this repo; Ctrl+R
+# again cycles directory / global / host / session). The Up arrow stays zsh's own,
+# and --disable-ai keeps ? a plain key instead of sending a prompt to Atuin's
+# hosted AI. Ghost text tries this directory, then this repo, then all history,
+# then completion: what was run here is the likeliest next command.
+if command -v atuin >/dev/null 2>&1; then
+  eval "$(atuin init zsh --disable-up-arrow --disable-ai)"
+  _devbox_atuin_suggest() {   # <filter mode> <buffer>
+    suggestion=$(ATUIN_QUERY="$2" atuin search --cmd-only --author '$all-user' --limit 1 \
+      --search-mode prefix --filter-mode "$1" 2>/dev/null)
+  }
+  _zsh_autosuggest_strategy_atuin_directory() { _devbox_atuin_suggest directory "$1"; }
+  _zsh_autosuggest_strategy_atuin_workspace() { _devbox_atuin_suggest workspace "$1"; }
+  # Not atuin's own "atuin" strategy: it takes the default filter from the config,
+  # whose search.filters puts workspace first — so outside a repo it finds nothing.
+  _zsh_autosuggest_strategy_atuin_global() { _devbox_atuin_suggest global "$1"; }
+  ZSH_AUTOSUGGEST_STRATEGY=(atuin_directory atuin_workspace atuin_global completion)
+fi
+ZATUIN
   fi
 
   render_devbox_eza
@@ -1607,6 +1704,7 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, code dir, shell config
 [[ "$INSTALL_STERN"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_GLOW"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_YAZI"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_ATUIN"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_OMZ"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ZSH_PLUGINS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_NODE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -1771,6 +1869,11 @@ fi
 if [[ "$INSTALL_YAZI" == "true" ]]; then
   log "Installing yazi"
   ensure_yazi
+fi
+
+if [[ "$INSTALL_ATUIN" == "true" ]]; then
+  log "Installing atuin"
+  ensure_atuin
 fi
 
 if [[ "$INSTALL_OMZ" == "true" ]]; then

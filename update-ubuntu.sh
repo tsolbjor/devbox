@@ -13,6 +13,7 @@ UPDATE_LAZYGIT="${UPDATE_LAZYGIT:-true}"
 UPDATE_STERN="${UPDATE_STERN:-true}"
 UPDATE_GLOW="${UPDATE_GLOW:-true}"
 UPDATE_YAZI="${UPDATE_YAZI:-true}"
+UPDATE_ATUIN="${UPDATE_ATUIN:-true}"
 UPDATE_ASPIRE="${UPDATE_ASPIRE:-true}"               # aspire CLI (re-runs the aspire.dev installer)
 UPDATE_K9S="${UPDATE_K9S:-true}"
 UPDATE_KUBECTX="${UPDATE_KUBECTX:-true}"
@@ -51,6 +52,7 @@ Usage: update-ubuntu.sh [options]
   --skip-stern         Skip stern update
   --skip-glow          Skip glow update
   --skip-yazi          Skip yazi update
+  --skip-atuin         Skip atuin update
   --skip-aspire        Skip Aspire CLI update
   --skip-k9s           Skip k9s update
   --skip-kubectx       Skip kubectx/kubens update
@@ -78,6 +80,7 @@ while [[ $# -gt 0 ]]; do
     --skip-stern)        UPDATE_STERN=false ;;
     --skip-glow)         UPDATE_GLOW=false ;;
     --skip-yazi)         UPDATE_YAZI=false ;;
+    --skip-atuin)        UPDATE_ATUIN=false ;;
     --skip-aspire)       UPDATE_ASPIRE=false ;;
     --skip-k9s)          UPDATE_K9S=false ;;
     --skip-kubectx)      UPDATE_KUBECTX=false ;;
@@ -305,6 +308,27 @@ update_yazi() {
   sudo install -m 0755 "$tmp/yazi" "$tmp/ya" /usr/local/bin/
   rm -rf "$tmp"
   echo "✓ yazi updated to $num"
+}
+
+update_atuin() {
+  if ! ensure_command atuin; then
+    echo "✓ atuin not installed, skipping"
+    return
+  fi
+  local current latest num arch dir
+  current=$(atuin --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  latest=$(get_github_latest_tag "atuinsh/atuin") || return 1   # vX.Y.Z
+  num="${latest#v}"
+  if [[ "$current" == "$num" ]]; then
+    echo "✓ atuin already at latest ($current)"
+    return
+  fi
+  echo "→ Updating atuin: $current → $num"
+  arch=$([ "$(dpkg --print-architecture)" = "amd64" ] && echo "x86_64" || echo "aarch64")
+  dir="atuin-${arch}-unknown-linux-musl"
+  curl -fsSL "https://github.com/atuinsh/atuin/releases/download/${latest}/${dir}.tar.gz" \
+    | sudo tar -xz --strip-components=1 -C /usr/local/bin "${dir}/atuin"
+  echo "✓ atuin updated to $num"
 }
 
 # The Aspire CLI has no self-update: `aspire update` updates the *project's*
@@ -638,6 +662,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_STERN"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_GLOW"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_YAZI"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_ATUIN"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_ASPIRE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_K9S"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_KUBECTX"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -658,6 +683,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_STERN"       == "true" ]] && run_step "Updating stern"             --skip-stern        update_stern
 [[ "$UPDATE_GLOW"        == "true" ]] && run_step "Updating glow"              --skip-glow         update_glow
 [[ "$UPDATE_YAZI"        == "true" ]] && run_step "Updating yazi"              --skip-yazi         update_yazi
+[[ "$UPDATE_ATUIN"        == "true" ]] && run_step "Updating atuin"             --skip-atuin        update_atuin
 [[ "$UPDATE_ASPIRE"      == "true" ]] && run_step "Updating Aspire CLI"        --skip-aspire       update_aspire
 [[ "$UPDATE_K9S"         == "true" ]] && run_step "Updating k9s"               --skip-k9s          update_k9s
 [[ "$UPDATE_KUBECTX"     == "true" ]] && run_step "Updating kubectx/kubens"    --skip-kubectx      update_kubectx
