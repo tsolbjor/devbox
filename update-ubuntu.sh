@@ -171,21 +171,42 @@ update_apt() {
   echo "✓ apt packages up to date"
 }
 
+# Run an upstream install script quietly: its how-to-wire-your-shell boilerplate
+# is noise here (the generated devbox rc already does that), so it is shown only
+# when the install fails.
+run_installer_quietly() {
+  local out
+  if ! out=$("$@" 2>&1); then
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+}
+
+install_starship() {
+  curl -fsSL https://starship.rs/install.sh | sh -s -- --yes --bin-dir "$HOME/.local/bin"
+}
+
 update_starship() {
   if ! ensure_command starship; then
     echo "✓ starship not installed, skipping"
     return
   fi
-  local before after
-  before=$(starship --version 2>/dev/null | head -1 || echo "?")
-  echo "→ Updating starship (current: $before)"
-  curl -fsSL https://starship.rs/install.sh | sh -s -- --yes --bin-dir "$HOME/.local/bin"
-  after=$(starship --version 2>/dev/null | head -1 || echo "?")
-  if [[ "$before" == "$after" ]]; then
-    echo "✓ starship already at latest ($after)"
-  else
-    echo "✓ starship updated: $before → $after"
+  local current latest num
+  current=$(starship --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  latest=$(get_github_latest_tag "starship/starship") || return 1   # vX.Y.Z
+  num="${latest#v}"
+  if [[ "$current" == "$num" ]]; then
+    echo "✓ starship already at latest ($current)"
+    return
   fi
+  echo "→ Updating starship: $current → $num"
+  run_installer_quietly install_starship || return 1
+  echo "✓ starship updated to $(starship --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+}
+
+install_zoxide() {
+  curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh \
+    | sh -s -- --bin-dir "$HOME/.local/bin"
 }
 
 update_zoxide() {
@@ -193,17 +214,17 @@ update_zoxide() {
     echo "✓ zoxide not installed, skipping"
     return
   fi
-  local before after
-  before=$(zoxide --version 2>/dev/null || echo "?")
-  echo "→ Updating zoxide (current: $before)"
-  curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh \
-    | sh -s -- --bin-dir "$HOME/.local/bin"
-  after=$(zoxide --version 2>/dev/null || echo "?")
-  if [[ "$before" == "$after" ]]; then
-    echo "✓ zoxide already at latest ($after)"
-  else
-    echo "✓ zoxide updated: $before → $after"
+  local current latest num
+  current=$(zoxide --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  latest=$(get_github_latest_tag "ajeetdsouza/zoxide") || return 1   # vX.Y.Z
+  num="${latest#v}"
+  if [[ "$current" == "$num" ]]; then
+    echo "✓ zoxide already at latest ($current)"
+    return
   fi
+  echo "→ Updating zoxide: $current → $num"
+  run_installer_quietly install_zoxide || return 1
+  echo "✓ zoxide updated to $(zoxide --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 }
 
 update_delta() {
