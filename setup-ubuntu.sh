@@ -272,14 +272,40 @@ ensure_git_safe_directory() {
 # kept in the Windows credential store, one login shared by both sides. The SSH
 # key below still covers GitHub over SSH; Azure DevOps clients mostly hand out
 # HTTPS URLs, which is where this earns its place.
+# Git for Windows has moved GCM between toolchain folders (mingw64 → ucrt64; ARM
+# builds use clangarm64), so look in each rather than pin one path. Prints the
+# first hit, or nothing. `--find-gcm` exposes this to audit-ubuntu.sh.
+find_windows_gcm() {
+  local dir gcm
+  for dir in ucrt64 mingw64 clangarm64; do
+    gcm="/mnt/c/Program Files/Git/$dir/bin/git-credential-manager.exe"
+    if [[ -x "$gcm" ]]; then
+      printf '%s\n' "$gcm"
+      return
+    fi
+  done
+}
+
+# Whether credential.helper value $1 runs GCM at path $2. Two spellings work, since
+# the helper is run through the shell: the escaped form setup writes, and the
+# quoted `!"…"` form other guides (and GCM's own docs) use.
+gcm_helper_matches() {
+  [[ "$1" == "${2// /\\ }" || "$1" == "!\"$2\"" ]]
+}
+
 ensure_git_credential_manager() {
-  local gcm="/mnt/c/Program Files/Git/mingw64/bin/git-credential-manager.exe"
-  if [[ ! -x "$gcm" ]]; then
-    echo "⚠ Git Credential Manager not found at $gcm — install Git for Windows (setup-windows.ps1), then rerun"
+  local gcm current
+  gcm="$(find_windows_gcm)"
+  if [[ -z "$gcm" ]]; then
+    echo "⚠ Git Credential Manager not found under /mnt/c/Program Files/Git/{ucrt64,mingw64,clangarm64}/bin — install Git for Windows (setup-windows.ps1), then rerun"
     return
   fi
-  # credential.helper is run through the shell, so the space must stay escaped.
-  ensure_git_config "credential.helper" "${gcm// /\\ }"
+  current="$(git config --global --get credential.helper || true)"
+  if gcm_helper_matches "$current" "$gcm"; then
+    echo "✓ git config credential.helper already set ($gcm)"
+  else
+    ensure_git_config "credential.helper" "${gcm// /\\ }"
+  fi
   # Azure Repos scopes credentials per organisation, which lives in the URL path.
   # Scoped to dev.azure.com rather than set globally: a global useHttpPath makes
   # GCM store (and prompt for) a separate GitHub credential per repository.
@@ -1651,6 +1677,13 @@ ensure_git_signing() {
 # touching nothing: audit-ubuntu.sh diffs the installed file against it.
 if [[ "${1:-}" == "--render-rc" ]]; then
   render_devbox_rc "${2:?usage: setup-ubuntu.sh --render-rc bash|zsh}"
+  exit
+fi
+
+# `--find-gcm` prints the Windows Git Credential Manager path (or nothing) and
+# exits, so audit-ubuntu.sh checks the same location setup wires in.
+if [[ "${1:-}" == "--find-gcm" ]]; then
+  find_windows_gcm
   exit
 fi
 

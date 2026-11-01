@@ -261,10 +261,12 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
     done
     # HTTPS auth via the Windows Git Credential Manager (ensure_git_credential_manager),
     # checked only where setup would have wired it: on WSL, with Git for Windows present.
-    gcm="/mnt/c/Program Files/Git/mingw64/bin/git-credential-manager.exe"
-    if on_wsl && grep -qE '^USE_WINDOWS_GCM="\$\{USE_WINDOWS_GCM:-(auto|true)\}"' "$SETUP" && [[ -x "$gcm" ]]; then
+    # The path comes from setup (--find-gcm): Git for Windows moves it between toolchain folders.
+    gcm="$(bash "$SETUP" --find-gcm)"
+    if on_wsl && grep -qE '^USE_WINDOWS_GCM="\$\{USE_WINDOWS_GCM:-(auto|true)\}"' "$SETUP" && [[ -n "$gcm" ]]; then
       helper=$(git config --global --get credential.helper 2>/dev/null)
-      if [[ "$helper" != "${gcm// /\\ }" ]]; then
+      # Either spelling runs GCM through the shell: setup's escaped form or the quoted !"…" form.
+      if [[ "$helper" != "${gcm// /\\ }" && "$helper" != "!\"$gcm\"" ]]; then
         report_drift "git credential.helper is '${helper:-unset}', not the Windows Git Credential Manager." \
           "fix: bash setup-ubuntu.sh" "keep: set USE_WINDOWS_GCM=false in setup-ubuntu.sh"
       fi
