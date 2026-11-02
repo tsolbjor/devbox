@@ -72,6 +72,7 @@ bash setup-ubuntu.sh
 - Functions: `PascalCase` verb-noun — `Ensure-WSL`, `Install-WingetPackage`, `Get-SystemResources`
 - Config: top-level `$Config` hashtable; `$null` values are resolved at runtime (e.g. WSL memory auto-detects to 75% of system RAM via `Get-SystemResources` + `Get-WslAllocation`)
 - Rancher Desktop settings are merged into its existing `settings.json` — never wholesale replaced
+- `setup-windows.ps1` and `update-windows.ps1` keep their window open when they own it (`Test-ConsoleClosesOnExit` — `GetConsoleProcessList` returns 1 under sudo's "new window" mode, a double-click or Run as administrator): they rerun themselves in-process and wait for Enter, passing the exit code through. `DEVBOX_NO_PAUSE=1` turns it off. An existing terminal, CI or a scheduled task is unaffected
 
 ### Idempotency pattern
 Check current state, skip if already correct, act and report if not. Every `Ensure-*` / `ensure_*` function follows this pattern.

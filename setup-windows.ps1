@@ -185,6 +185,35 @@ $Config = @{
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# A console this process has to itself (sudo in "new window" mode, a double-click,
+# Run as administrator) closes the moment the script exits, taking the summary and
+# any error with it. Rerun the script inside this one and wait for a key before
+# closing. In an existing terminal other processes share the console, so nothing
+# changes; with no console at all (CI, a scheduled task) the count is 0.
+function Test-ConsoleClosesOnExit {
+  if (-not [Environment]::UserInteractive) { return $false }
+  try {
+    Add-Type -Namespace Devbox -Name ConsoleInfo -MemberDefinition `
+      '[DllImport("kernel32.dll")] public static extern uint GetConsoleProcessList(uint[] list, uint count);'
+    return [Devbox.ConsoleInfo]::GetConsoleProcessList((New-Object UInt32[] 16), 16) -eq 1
+  } catch { return $false }
+}
+
+if ($PSCommandPath -and -not $env:DEVBOX_NO_PAUSE -and (Test-ConsoleClosesOnExit)) {
+  $env:DEVBOX_NO_PAUSE = "1"
+  $exitCode = 0
+  try {
+    & $PSCommandPath @args
+    if ($LASTEXITCODE) { $exitCode = $LASTEXITCODE }
+  } catch {
+    Write-Host "`n⚠ $($_.Exception.Message)" -ForegroundColor Red
+    $exitCode = 1
+  }
+  Write-Host "`nPress Enter to close this window..." -ForegroundColor Cyan -NoNewline
+  [void](Read-Host)
+  exit $exitCode
+}
+
 # wsl.exe emits UTF-16LE by default; in Windows PowerShell 5.1 that leaves embedded
 # null bytes in captured output, so string matches (e.g. `-contains "Ubuntu"`) silently
 # fail. Forcing UTF-8 makes wsl output parse cleanly. (WSL 0.64+; harmless if ignored.)
