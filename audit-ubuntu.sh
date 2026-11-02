@@ -41,7 +41,7 @@ CMD_DENYLIST="whoami powershell docker batcat fdfind ncu"
 IGNORE_SNAP="${IGNORE_SNAP:-}"
 IGNORE_PIPX="${IGNORE_PIPX:-}"
 IGNORE_NPM="${IGNORE_NPM:-}"
-IGNORE_DOTNET="${IGNORE_DOTNET:-}"
+IGNORE_DOTNET="${IGNORE_DOTNET:-microsoft.powerapps.cli.tool}"   # pac — client-specific Power Platform CLI
 IGNORE_PATTERNS="${IGNORE_PATTERNS:-}"
 
 # Keep in step with setup-ubuntu.sh.
@@ -312,16 +312,20 @@ if [[ "$CHECK_EXTRAS" == "true" ]]; then
     done < <(npm ls -g --depth=0 --parseable 2>/dev/null | sed '1d' | sed -E 's|.*/node_modules/||')
   fi
 
-  # .NET global tools vs expected (dotnet tool install -g <name>). `dotnet tool
+  # .NET global tools vs expected (the `ensure_dotnet_tool <package>` lines in setup). `dotnet tool
   # list -g` prints a header row plus a dashed rule before the data, hence +3.
   if command -v dotnet >/dev/null 2>&1; then
-    mapfile -t EXPECTED_DOTNET < <(grep -ohE 'dotnet tool install -g [a-zA-Z0-9._-]+' "$SETUP" update-ubuntu.sh 2>/dev/null | awk '{print $5}' | sort -u)
+    mapfile -t EXPECTED_DOTNET < <(grep -oE '^[[:space:]]*ensure_dotnet_tool [a-zA-Z0-9._-]+' "$SETUP" | awk '{print $2}' | sort -u)
+    installed_dotnet=$(dotnet tool list -g 2>/dev/null | tail -n +3 | awk '{print $1}')
+    for pkg in "${EXPECTED_DOTNET[@]}"; do
+      grep -qxiF "$pkg" <<< "$installed_dotnet" || report_drift "Missing .NET global tool: $pkg" "fix: bash setup-ubuntu.sh"
+    done
     while read -r pkg; do
       [[ -z "$pkg" ]] && continue
       is_ignored "$pkg" "$IGNORE_DOTNET" && skip_ignored && continue
       in_list "$pkg" "${EXPECTED_DOTNET[@]:-}" || \
-        report_drift "Extra .NET global tool: $pkg" "remove: dotnet tool uninstall -g $pkg" "adopt: add 'dotnet tool install -g $pkg' to ensure_dotnet_tools in setup-ubuntu.sh"
-    done < <(dotnet tool list -g 2>/dev/null | tail -n +3 | awk '{print $1}')
+        report_drift "Extra .NET global tool: $pkg" "remove: dotnet tool uninstall -g $pkg" "adopt: add 'ensure_dotnet_tool $pkg <command>' to ensure_dotnet_tools in setup-ubuntu.sh"
+    done <<< "$installed_dotnet"
   fi
 fi
 

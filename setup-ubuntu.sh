@@ -55,6 +55,7 @@ INSTALL_HELM="${INSTALL_HELM:-true}"
 INSTALL_K9S="${INSTALL_K9S:-true}"
 INSTALL_KUBECTX="${INSTALL_KUBECTX:-true}"
 INSTALL_KUBELOGIN="${INSTALL_KUBELOGIN:-true}"    # Entra ID credential plugin — required by kubectl against AKS
+INSTALL_OPENTOFU="${INSTALL_OPENTOFU:-true}"      # `tofu` — Terraform-compatible IaC, from OpenTofu's apt repo
 INSTALL_STARSHIP="${INSTALL_STARSHIP:-true}"
 STARSHIP_PRESET="${STARSHIP_PRESET:-nerd-font-symbols}"   # `starship preset --list`; empty keeps the built-in default
 
@@ -124,7 +125,8 @@ DOTNET_SDK_VERSION="${DOTNET_SDK_VERSION:-10.0}"  # current LTS, supported to No
                                                   # LTS and leaves support Nov 2026; https://dotnet.microsoft.com/download
 INSTALL_ASPIRE="${INSTALL_ASPIRE:-true}"          # `aspire` CLI from aspire.dev (needs a .NET SDK to run an AppHost)
 INSTALL_AZD="${INSTALL_AZD:-true}"                # `azd` — Azure Developer CLI; provisions and deploys an Aspire AppHost
-INSTALL_DOTNET_TOOLS="${INSTALL_DOTNET_TOOLS:-true}"  # .NET global tools (dotnet-outdated — the NuGet counterpart to ncu)
+INSTALL_DOTNET_TOOLS="${INSTALL_DOTNET_TOOLS:-true}"  # .NET global tools, listed in ensure_dotnet_tools: dotnet-outdated
+                                                      # (the NuGet counterpart to ncu), dotnet-ef, linux-dev-certs
 INSTALL_PYTHON="${INSTALL_PYTHON:-true}"          # python3 venv/pip + pipx + uv
 DOCKER_CHECK="${DOCKER_CHECK:-true}"              # verify docker answers (on WSL: Rancher Desktop's integration)
 GIT_SIGN_COMMITS="${GIT_SIGN_COMMITS:-true}"      # SSH-sign commits/tags with the generated key
@@ -523,6 +525,34 @@ ensure_kubelogin() {
   sudo install -m 0755 "$tmp/kubelogin" /usr/local/bin/kubelogin
   rm -rf "$tmp"
   echo "✓ kubelogin ${version} installed"
+}
+
+# From OpenTofu's own apt repo rather than the snap: apt works in the CI container
+# (no snapd there), and update-ubuntu.sh's apt upgrade then keeps it current.
+# Keyed on the apt package, not on `tofu` being on PATH, so an existing snap copy
+# does not stop the install; it is reported for removal instead.
+ensure_opentofu() {
+  if ! is_pkg_installed tofu; then
+    echo "→ Adding OpenTofu apt repo"
+    sudo install -m 0755 -d /etc/apt/keyrings
+    if [[ ! -f /etc/apt/keyrings/opentofu.gpg ]]; then
+      curl -fsSL https://get.opentofu.org/opentofu.gpg | sudo tee /etc/apt/keyrings/opentofu.gpg > /dev/null
+    fi
+    if [[ ! -f /etc/apt/keyrings/opentofu-repo.gpg ]]; then
+      curl -fsSL https://packages.opentofu.org/opentofu/tofu/gpgkey \
+        | sudo gpg --no-tty --batch --dearmor -o /etc/apt/keyrings/opentofu-repo.gpg
+    fi
+    sudo chmod a+r /etc/apt/keyrings/opentofu.gpg /etc/apt/keyrings/opentofu-repo.gpg
+    if [[ ! -f /etc/apt/sources.list.d/opentofu.list ]]; then
+      echo "deb [signed-by=/etc/apt/keyrings/opentofu.gpg,/etc/apt/keyrings/opentofu-repo.gpg] https://packages.opentofu.org/opentofu/tofu/any/ any main" \
+        | sudo tee /etc/apt/sources.list.d/opentofu.list > /dev/null
+      sudo apt-get update -y
+    fi
+  fi
+  ensure_pkg tofu
+  if command -v snap >/dev/null 2>&1 && snap list opentofu >/dev/null 2>&1; then
+    echo "⚠ the opentofu snap is installed too; the apt package now provides tofu — remove it: sudo snap remove opentofu"
+  fi
 }
 
 # Node comes from fnm, not apt. Client repos pin their own Node (.nvmrc,
@@ -1596,34 +1626,38 @@ ensure_dotnet_tool_shim() {
 # .NET global tools — the NuGet counterpart to the npm globals ensure_node installs:
 # `dotnet outdated` is to a .csproj what `ncu` is to a package.json.
 #
-# Keep the `dotnet tool install -g <package>` calls literal, not built from a
-# variable — audit-ubuntu.sh greps them out as the expected set, exactly as it does
-# the npm globals.
+# Keep the `ensure_dotnet_tool <package> <command>` calls literal, not built from
+# a variable — audit-ubuntu.sh greps them out as the expected set, exactly as it
+# does the npm globals.
 #
 # Tools land in ~/.dotnet/tools, which nothing here puts on PATH. Rather than add
 # another rc-file PATH line, shim into ~/.local/bin, which ensure_starship already
-# guarantees is on PATH — the same trade ensure_aspire makes. Should this list grow
-# past a handful, one PATH entry becomes the better deal.
+# guarantees is on PATH — the same trade ensure_aspire makes. The shim is also what
+# lets `dotnet ef` find dotnet-ef: the muxer looks for dotnet-<name> on PATH. Should
+# this list grow past a handful, one PATH entry becomes the better deal.
+#
+# One tool: package id $1, which installs command $2. Checked on disk, not on
+# PATH, since `dotnet tool install` exits non-zero on a tool that is already
+# installed — fatal under `set -e`.
+ensure_dotnet_tool() {
+  local pkg="$1" cmd="$2"
+  if [[ -x "$HOME/.dotnet/tools/$cmd" ]]; then
+    echo "✓ $pkg already installed"
+  else
+    echo "→ Installing $pkg"
+    dotnet tool install -g "$pkg"
+  fi
+  ensure_dotnet_tool_shim "$cmd"
+}
+
 ensure_dotnet_tools() {
   if ! ensure_command dotnet; then
     echo "⚠ dotnet not installed; skipping .NET global tools"
     return
   fi
-
-  # Checked three ways, like ensure_aspire: on PATH, then on disk but not yet on
-  # PATH. Skipping that second case would re-run the install, and `dotnet tool
-  # install` exits non-zero on an already-installed tool — fatal under `set -e`.
-  if ensure_command dotnet-outdated; then
-    echo "✓ dotnet-outdated already installed"
-  elif [[ -x "$HOME/.dotnet/tools/dotnet-outdated" ]]; then
-    echo "✓ dotnet-outdated already installed, not yet on PATH"
-  else
-    echo "→ Installing dotnet-outdated-tool"
-    dotnet tool install -g dotnet-outdated-tool
-    echo "✓ dotnet-outdated installed — run 'dotnet outdated' in a project"
-  fi
-
-  ensure_dotnet_tool_shim dotnet-outdated
+  ensure_dotnet_tool dotnet-outdated-tool dotnet-outdated   # `dotnet outdated` — NuGet counterpart to ncu
+  ensure_dotnet_tool dotnet-ef dotnet-ef                    # `dotnet ef` — EF Core migrations
+  ensure_dotnet_tool linux-dev-certs dotnet-linux-dev-certs # `dotnet linux-dev-certs install` — trusts the ASP.NET dev cert
 }
 
 ensure_python() {
@@ -1728,6 +1762,7 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, code dir, shell config
 [[ "$INSTALL_K9S"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_KUBECTX"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_KUBELOGIN"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_OPENTOFU"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_STARSHIP"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ZOXIDE"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_BAT"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -1857,6 +1892,11 @@ fi
 if [[ "$INSTALL_KUBELOGIN" == "true" ]]; then
   log "Installing kubelogin"
   ensure_kubelogin
+fi
+
+if [[ "$INSTALL_OPENTOFU" == "true" ]]; then
+  log "Installing OpenTofu"
+  ensure_opentofu
 fi
 
 if [[ "$INSTALL_STARSHIP" == "true" ]]; then
