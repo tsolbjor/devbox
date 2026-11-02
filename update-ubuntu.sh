@@ -19,6 +19,8 @@ UPDATE_K9S="${UPDATE_K9S:-true}"
 UPDATE_KUBECTX="${UPDATE_KUBECTX:-true}"
 UPDATE_KUBELOGIN="${UPDATE_KUBELOGIN:-true}"
 UPDATE_AZD="${UPDATE_AZD:-true}"                     # azd CLI (re-runs the Microsoft installer)
+UPDATE_DOTNET="${UPDATE_DOTNET:-true}"               # each SDK major in DOTNET_INSTALL_DIR to its newest band/patch
+DOTNET_INSTALL_DIR="${DOTNET_INSTALL_DIR:-$HOME/.dotnet}"   # keep in step with setup-ubuntu.sh
 UPDATE_DOTNET_TOOLS="${UPDATE_DOTNET_TOOLS:-true}"   # dotnet tool update -g, per installed global tool
 UPDATE_NODE="${UPDATE_NODE:-true}"                   # fnm itself + latest patch of the default Node major
 FNM_DIR="${FNM_DIR:-$HOME/.local/share/fnm}"         # keep in step with setup-ubuntu.sh
@@ -58,6 +60,7 @@ Usage: update-ubuntu.sh [options]
   --skip-kubectx       Skip kubectx/kubens update
   --skip-kubelogin     Skip kubelogin update
   --skip-azd           Skip Azure Developer CLI update
+  --skip-dotnet        Skip .NET SDK update (newest feature band per major)
   --skip-dotnet-tools  Skip .NET global tool updates
   --skip-node          Skip fnm + Node patch update
   --pins               Offer to move node/kubectl to the versions pinned in
@@ -86,6 +89,7 @@ while [[ $# -gt 0 ]]; do
     --skip-kubectx)      UPDATE_KUBECTX=false ;;
     --skip-kubelogin)    UPDATE_KUBELOGIN=false ;;
     --skip-azd)          UPDATE_AZD=false ;;
+    --skip-dotnet)       UPDATE_DOTNET=false ;;
     --skip-dotnet-tools) UPDATE_DOTNET_TOOLS=false ;;
     --skip-node)         UPDATE_NODE=false ;;
     --pins)              UPDATE_PINS=true ;;
@@ -474,7 +478,83 @@ update_azd() {
   echo "✓ azd updated to $(azd version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 }
 
+# Put DOTNET_INSTALL_DIR on PATH for this script (see activate_dotnet in setup-ubuntu.sh).
+activate_dotnet() {
+  [[ -x "$DOTNET_INSTALL_DIR/dotnet" ]] || return 1
+  export DOTNET_ROOT="$DOTNET_INSTALL_DIR"
+  case ":$PATH:" in *":$DOTNET_ROOT:"*) ;; *) export PATH="$DOTNET_ROOT:$PATH" ;; esac
+  hash -r
+}
+
+# Same call as dotnet_install in setup-ubuntu.sh; its chatter goes to /dev/null,
+# errors still reach the terminal.
+dotnet_install() {
+  local script
+  script="$(mktemp)"
+  curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$script" || { rm -f "$script"; return 1; }
+  bash "$script" --install-dir "$DOTNET_INSTALL_DIR" --no-path "$@" >/dev/null || { rm -f "$script"; return 1; }
+  rm -f "$script"
+}
+
+# Delete all but the newest version per group under each of the given dirs.
+# Group key: SDKs by feature band (10.0.403 → 10.0.4), runtimes by major.minor.
+# Previews (anything with a '-') are left alone. Deleting the version directory
+# is how a dotnet-install.sh install is uninstalled.
+prune_dotnet_versions() {
+  local kind="$1" root v key; shift
+  local -A keep=()
+  for root in "$@"; do
+    [[ -d "$root" ]] || continue
+    keep=()
+    while read -r v; do
+      if [[ "$kind" == sdk ]]; then
+        [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]{3}$ ]] || continue
+        key="${v:0:${#v}-2}"   # 10.0.403 → 10.0.4
+      else
+        [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+        key="${v%.*}"
+      fi
+      if [[ -n "${keep[$key]:-}" ]]; then
+        rm -rf "${root:?}/${keep[$key]}"
+        echo "✓ removed replaced $(basename "$root") ${keep[$key]}"
+      fi
+      keep[$key]="$v"
+    done < <(ls -1 "$root" | sort -V)
+  done
+}
+
+# Each SDK major in DOTNET_INSTALL_DIR to its newest feature band and patch —
+# Ubuntu's apt feed would never move past 1xx, which is why setup installs from
+# dotnet-install.sh. The pin is not consulted: a major someone installed stays,
+# and a new major is setup's job (SDKs coexist). Replaced patches are pruned,
+# older feature bands kept: a global.json may pin one, and roll-forward only
+# moves up.
+update_dotnet() {
+  if ! activate_dotnet; then
+    echo "✓ no .NET in $DOTNET_INSTALL_DIR, skipping"
+    return
+  fi
+  local before after channels ch added
+  before="$(dotnet --list-sdks 2>/dev/null | awk '{print $1}')"
+  mapfile -t channels < <(awk -F. 'NF >= 3 {print $1 "." $2}' <<< "$before" | sort -uV)
+  for ch in "${channels[@]}"; do
+    echo "→ Checking .NET SDK $ch for a newer band or patch"
+    dotnet_install --channel "$ch" || return 1
+  done
+  after="$(dotnet --list-sdks 2>/dev/null | awk '{print $1}')"
+  added="$(comm -13 <(sort <<< "$before") <(sort <<< "$after") | paste -sd' ' -)"
+  if [[ -z "$added" ]]; then
+    echo "✓ .NET SDKs already at latest ($(paste -sd' ' - <<< "$after"))"
+    return
+  fi
+  echo "✓ installed .NET SDK $added"
+  prune_dotnet_versions sdk "$DOTNET_INSTALL_DIR/sdk"
+  prune_dotnet_versions runtime "$DOTNET_INSTALL_DIR"/shared/*
+  echo "✓ .NET SDKs now: $(dotnet --list-sdks 2>/dev/null | awk '{print $1}' | paste -sd' ' -)"
+}
+
 update_dotnet_tools() {
+  activate_dotnet || true
   if ! command -v dotnet >/dev/null 2>&1; then
     echo "✓ dotnet not installed, skipping"
     return
@@ -696,6 +776,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_KUBECTX"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_KUBELOGIN"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_AZD"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_DOTNET"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_DOTNET_TOOLS" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_NODE"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_PINS"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -717,6 +798,7 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_KUBECTX"     == "true" ]] && run_step "Updating kubectx/kubens"    --skip-kubectx      update_kubectx
 [[ "$UPDATE_KUBELOGIN"   == "true" ]] && run_step "Updating kubelogin"        --skip-kubelogin    update_kubelogin
 [[ "$UPDATE_AZD"         == "true" ]] && run_step "Updating azd"              --skip-azd          update_azd
+[[ "$UPDATE_DOTNET"      == "true" ]] && run_step "Updating .NET SDKs"         --skip-dotnet       update_dotnet
 [[ "$UPDATE_DOTNET_TOOLS" == "true" ]] && run_step "Updating .NET global tools" --skip-dotnet-tools update_dotnet_tools
 [[ "$UPDATE_NODE"        == "true" ]] && run_step "Updating fnm and Node"      --skip-node         update_node
 [[ "$UPDATE_PINS"        == "true" ]] && run_step "Reconciling version pins"  "(omit --pins)"     update_pins

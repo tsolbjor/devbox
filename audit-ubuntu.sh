@@ -47,6 +47,7 @@ IGNORE_PATTERNS="${IGNORE_PATTERNS:-}"
 # Keep in step with setup-ubuntu.sh.
 FNM_DIR="${FNM_DIR:-$HOME/.local/share/fnm}"
 NPM_GLOBAL_PREFIX="${NPM_GLOBAL_PREFIX:-$HOME/.local}"
+DOTNET_INSTALL_DIR="${DOTNET_INSTALL_DIR:-$HOME/.dotnet}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -66,6 +67,11 @@ done
 if [[ -x "$FNM_DIR/fnm" ]]; then
   export FNM_DIR PATH="$FNM_DIR:$PATH"
   eval "$("$FNM_DIR/fnm" env --shell bash)"
+fi
+# Likewise the .NET in DOTNET_INSTALL_DIR, ahead of any apt /usr/bin/dotnet, as
+# ~/.config/devbox/<shell>rc puts it: the CLI, tools and pin checks read that one.
+if [[ -x "$DOTNET_INSTALL_DIR/dotnet" ]]; then
+  export DOTNET_ROOT="$DOTNET_INSTALL_DIR" PATH="$DOTNET_INSTALL_DIR:$PATH"
 fi
 
 drift=0
@@ -585,6 +591,41 @@ if [[ "$CHECK_CONFIG" == "true" && -x "$FNM_DIR/fnm" ]]; then
   fi
 
   [[ "$node_clean" == "true" ]] && report_ok "fnm is the only Node provider; npm globals in $NPM_GLOBAL_PREFIX."
+fi
+
+# ---------- .NET toolchain ----------
+# Setup installs .NET with dotnet-install.sh into DOTNET_INSTALL_DIR, because
+# Ubuntu's apt feed only ever ships the 1xx feature band. An apt SDK left beside it
+# is shadowed in a devbox shell but is still what /usr/bin/dotnet — and any shell
+# that skipped the rc file — runs, stuck on 1xx; so it is drift even when the
+# `dotnet` on PATH looks right.
+if [[ "$CHECK_CONFIG" == "true" ]] && grep -q '^INSTALL_DOTNET="${INSTALL_DOTNET:-true}"' "$SETUP"; then
+  section ".NET toolchain ($DOTNET_INSTALL_DIR)"
+  dotnet_clean=true
+
+  if [[ ! -x "$DOTNET_INSTALL_DIR/dotnet" ]]; then
+    dotnet_clean=false
+    report_drift "no .NET in $DOTNET_INSTALL_DIR — setup installs it there (newest feature band)" "fix: bash setup-ubuntu.sh"
+  fi
+  apt_dotnet=$(dpkg-query -W -f='${db:Status-Status} ${Package}\n' 2>/dev/null \
+    | awk '$1 == "installed" && $2 ~ /^(dotnet-|aspnetcore-|netstandard-targeting-pack)/ {print $2}' | paste -sd' ' -)
+  if [[ -n "$apt_dotnet" ]]; then
+    dotnet_clean=false
+    report_drift "apt .NET installed alongside $DOTNET_INSTALL_DIR (1xx feature band only): $apt_dotnet" \
+      "fix: bash setup-ubuntu.sh   (reinstalls its SDKs in $DOTNET_INSTALL_DIR, then offers to purge; MIGRATE_APT_DOTNET=yes to skip the prompt)" \
+      "or:  sudo apt-get purge $apt_dotnet && sudo apt-get autoremove"
+  fi
+
+  # Several dotnet installs on PATH: which one runs depends on rc load order. As
+  # for node: Windows copies under /mnt/ are interop and ignored, and the resolved
+  # path dedupes usrmerge's /bin vs /usr/bin.
+  dotnet_paths=$(type -ap dotnet 2>/dev/null | grep -v '^/mnt/' | while read -r p; do readlink -f "$p"; done | awk '!seen[$0]++' || true)
+  if [[ $(grep -c . <<<"$dotnet_paths") -gt 1 ]]; then
+    dotnet_clean=false
+    report_warn "multiple dotnet installs on PATH (first wins): $(paste -sd' ' <<<"$dotnet_paths")"
+  fi
+
+  [[ "$dotnet_clean" == "true" ]] && report_ok "$DOTNET_INSTALL_DIR is the only .NET; SDKs: $("$DOTNET_INSTALL_DIR/dotnet" --list-sdks 2>/dev/null | awk '{print $1}' | paste -sd' ' -)."
 fi
 
 # ---------- summary ----------

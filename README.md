@@ -101,7 +101,7 @@ Installs and configures:
 | Shell UX | 200 000-line history for bash and zsh (flushed per command), inline suggestions in a readable colour, PSReadLine-style accept keys (`→`, `Ctrl+→`, `Tab`), `Ctrl+R` history picker |
 | Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, wget, zip, git-delta, lazygit, glow, yazi, micro, GitHub CLI, Node.js via fnm |
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (npm global) |
-| Languages | .NET SDK (10 LTS), Aspire CLI, `dotnet outdated` (NuGet's `ncu`), Python (venv/pip/pipx/uv) |
+| Languages | .NET SDK (10 LTS, newest feature band, in `~/.dotnet` — Ubuntu's apt feed stops at 1xx), Aspire CLI, `dotnet outdated` (NuGet's `ncu`), Python (venv/pip/pipx/uv) |
 | Azure | Azure Developer CLI (`azd`) — provisions and deploys an Aspire AppHost |
 | Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern, kubelogin (Entra auth for AKS) |
 | Containers | verifies docker answers — on WSL, that Rancher Desktop's docker is wired in |
@@ -119,7 +119,7 @@ Both scripts have a `PARAMETERS` section at the very top — edit values there b
 
 **Bootstrap** (`bootstrap-windows.ps1`) — edit the `DevDrive` block to change the drive `Letter`, `SizeGB` (VHDX max — expandable, so it only uses real disk as it fills), or `VhdxPath`; set `Create = $false` to reuse an existing `D:`. `Repo.Url` / `CloneRoot` control where the repo lands. These only apply if you clone the repo first and run the script locally — the `irm … | iex` one-liner runs the defaults.
 
-**Ubuntu** — set `INSTALL_KUBECTL=false` to skip Kubernetes tools; toggle `INSTALL_DOTNET` / `INSTALL_PYTHON` (or pin `DOTNET_SDK_VERSION`); set `GIT_SIGN_COMMITS=false` to skip SSH commit signing; change `STARSHIP_PRESET` to any name from [starship.rs/presets](https://starship.rs/presets/) (or empty for the built-in default); set `WSL_ENABLE_SYSTEMD=false` on older Windows builds.
+**Ubuntu** — set `INSTALL_KUBECTL=false` to skip Kubernetes tools; toggle `INSTALL_DOTNET` / `INSTALL_PYTHON` (or pin `DOTNET_SDK_VERSION`; a machine with apt's `dotnet-sdk-*` from an older setup is offered a move to `~/.dotnet` — `MIGRATE_APT_DOTNET=yes|no` answers for it); set `GIT_SIGN_COMMITS=false` to skip SSH commit signing; change `STARSHIP_PRESET` to any name from [starship.rs/presets](https://starship.rs/presets/) (or empty for the built-in default); set `WSL_ENABLE_SYSTEMD=false` on older Windows builds.
 
 ## Keeping up to date
 
@@ -134,7 +134,8 @@ nothing new, only upgrade what's there. Safe to rerun anytime.
 
 ```bash
 # Ubuntu (WSL or native): apt upgrade + fnm and the latest Node patch, starship, zoxide,
-# git-delta, lazygit, stern, glow, yazi, k9s, kubectx, npm globals, pipx tools. Use --skip-<tool> to opt out.
+# git-delta, lazygit, stern, glow, yazi, k9s, kubectx, the .NET SDKs (newest feature band per major),
+# npm globals, pipx tools. Use --skip-<tool> to opt out.
 bash update-ubuntu.sh
 ```
 
