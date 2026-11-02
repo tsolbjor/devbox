@@ -427,8 +427,15 @@ update_kubelogin() {
     echo "✓ kubelogin not installed, skipping"
     return
   fi
-  local current latest dpkg_arch tmp
-  current=$(kubelogin --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  # Version the copy this step manages, not whichever kubelogin wins PATH: a stray
+  # copy ahead of it (e.g. ~/.local/bin from `az aks install-cli`) would otherwise
+  # read as outdated forever, and every run would reinstall a binary nobody runs.
+  local managed=/usr/local/bin/kubelogin current latest dpkg_arch tmp winner
+  winner=$(command -v kubelogin)
+  if [[ "$winner" != "$managed" ]]; then
+    echo "⚠ $winner shadows $managed on PATH, so the update below does not reach it — remove it: rm '$winner'"
+  fi
+  current=$("$managed" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
   latest=$(get_github_latest_tag "Azure/kubelogin") || return 1
   if [[ "$current" == "$latest" ]]; then
     echo "✓ kubelogin already at latest ($current)"
