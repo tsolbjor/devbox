@@ -67,6 +67,8 @@ INSTALL_DELTA="${INSTALL_DELTA:-true}"              # git-delta: nicer diffs (wi
 INSTALL_LAZYGIT="${INSTALL_LAZYGIT:-true}"          # git TUI
 INSTALL_STERN="${INSTALL_STERN:-true}"              # multi-pod Kubernetes log tailing
 INSTALL_GLOW="${INSTALL_GLOW:-true}"                # rendered markdown in the terminal
+INSTALL_YQ="${INSTALL_YQ:-true}"                    # jq for YAML/TOML/XML (mikefarah's Go yq, not apt's Python wrapper)
+INSTALL_SOPS="${INSTALL_SOPS:-true}"                # encrypted secrets files (age / Azure Key Vault / KMS)
 INSTALL_YAZI="${INSTALL_YAZI:-true}"                # terminal file manager (`y` cds to where you quit)
 INSTALL_ATUIN="${INSTALL_ATUIN:-true}"              # zsh history in SQLite with cwd/repo: Ctrl+R picker and
                                                     # ghost text that prefer this directory, then this repo
@@ -902,6 +904,40 @@ ensure_glow() {
   curl -fsSL "https://github.com/charmbracelet/glow/releases/download/${version}/${dir}.tar.gz" \
     | sudo tar -xz --strip-components=1 -C /usr/local/bin "${dir}/glow"
   echo "✓ glow ${version} installed"
+}
+
+# mikefarah's yq: one static binary. Ubuntu's apt `yq` is a different tool (the
+# Python jq wrapper, different syntax), so it comes from the GitHub release instead.
+ensure_yq() {
+  if ensure_command yq; then
+    echo "✓ yq already installed"
+    return
+  fi
+  echo "→ Installing yq (latest)"
+  local version dpkg_arch tmp
+  version=$(gh_latest_tag mikefarah/yq)   # e.g. v4.54.2
+  dpkg_arch=$(dpkg --print-architecture)   # amd64 / arm64 — matches yq's asset naming
+  tmp=$(mktemp -d)
+  curl -fsSL -o "$tmp/yq" "https://github.com/mikefarah/yq/releases/download/${version}/yq_linux_${dpkg_arch}"
+  sudo install -m 0755 "$tmp/yq" /usr/local/bin/yq
+  rm -rf "$tmp"
+  echo "✓ yq ${version} installed"
+}
+
+ensure_sops() {
+  if ensure_command sops; then
+    echo "✓ sops already installed"
+    return
+  fi
+  echo "→ Installing sops (latest)"
+  local version dpkg_arch tmp
+  version=$(gh_latest_tag getsops/sops)   # e.g. v3.13.3
+  dpkg_arch=$(dpkg --print-architecture)
+  tmp=$(mktemp -d)
+  curl -fsSL -o "$tmp/sops" "https://github.com/getsops/sops/releases/download/${version}/sops-${version}.linux.${dpkg_arch}"
+  sudo install -m 0755 "$tmp/sops" /usr/local/bin/sops
+  rm -rf "$tmp"
+  echo "✓ sops ${version} installed"
 }
 
 # The musl build: statically linked, so it runs on any glibc (the devcontainer's
@@ -1860,6 +1896,8 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, code dir, shell config
 [[ "$INSTALL_LAZYGIT"     == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_STERN"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_GLOW"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_YQ"          == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_SOPS"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_YAZI"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ATUIN"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_OMZ"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -2026,6 +2064,16 @@ fi
 if [[ "$INSTALL_GLOW" == "true" ]]; then
   log "Installing glow"
   ensure_glow
+fi
+
+if [[ "$INSTALL_YQ" == "true" ]]; then
+  log "Installing yq"
+  ensure_yq
+fi
+
+if [[ "$INSTALL_SOPS" == "true" ]]; then
+  log "Installing sops"
+  ensure_sops
 fi
 
 if [[ "$INSTALL_YAZI" == "true" ]]; then

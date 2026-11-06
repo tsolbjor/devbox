@@ -12,6 +12,8 @@ UPDATE_DELTA="${UPDATE_DELTA:-true}"
 UPDATE_LAZYGIT="${UPDATE_LAZYGIT:-true}"
 UPDATE_STERN="${UPDATE_STERN:-true}"
 UPDATE_GLOW="${UPDATE_GLOW:-true}"
+UPDATE_YQ="${UPDATE_YQ:-true}"
+UPDATE_SOPS="${UPDATE_SOPS:-true}"
 UPDATE_YAZI="${UPDATE_YAZI:-true}"
 UPDATE_ATUIN="${UPDATE_ATUIN:-true}"
 UPDATE_ASPIRE="${UPDATE_ASPIRE:-true}"               # aspire CLI (re-runs the aspire.dev installer)
@@ -53,6 +55,8 @@ Usage: update-ubuntu.sh [options]
   --skip-lazygit       Skip lazygit update
   --skip-stern         Skip stern update
   --skip-glow          Skip glow update
+  --skip-yq            Skip yq update
+  --skip-sops          Skip sops update
   --skip-yazi          Skip yazi update
   --skip-atuin         Skip atuin update
   --skip-aspire        Skip Aspire CLI update
@@ -82,6 +86,8 @@ while [[ $# -gt 0 ]]; do
     --skip-lazygit)      UPDATE_LAZYGIT=false ;;
     --skip-stern)        UPDATE_STERN=false ;;
     --skip-glow)         UPDATE_GLOW=false ;;
+    --skip-yq)           UPDATE_YQ=false ;;
+    --skip-sops)         UPDATE_SOPS=false ;;
     --skip-yazi)         UPDATE_YAZI=false ;;
     --skip-atuin)        UPDATE_ATUIN=false ;;
     --skip-aspire)       UPDATE_ASPIRE=false ;;
@@ -309,6 +315,59 @@ update_glow() {
   curl -fsSL "https://github.com/charmbracelet/glow/releases/download/${latest}/${dir}.tar.gz" \
     | sudo tar -xz --strip-components=1 -C /usr/local/bin "${dir}/glow"
   echo "✓ glow updated to $num"
+}
+
+# Replaces the binary where it is, so a copy outside /usr/local/bin is updated rather
+# than shadowed by a second one.
+install_release_binary() {   # <url> <target path>
+  local url="$1" target="$2" tmp
+  tmp=$(mktemp -d)
+  curl -fsSL -o "$tmp/bin" "$url" || { rm -rf "$tmp"; return 1; }
+  if [[ -w "$(dirname "$target")" ]]; then
+    install -m 0755 "$tmp/bin" "$target"
+  else
+    sudo install -m 0755 "$tmp/bin" "$target"
+  fi
+  rm -rf "$tmp"
+}
+
+update_yq() {
+  if ! ensure_command yq; then
+    echo "✓ yq not installed, skipping"
+    return
+  fi
+  local current latest num
+  current=$(yq --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  latest=$(get_github_latest_tag "mikefarah/yq") || return 1   # vX.Y.Z
+  num="${latest#v}"
+  if [[ "$current" == "$num" ]]; then
+    echo "✓ yq already at latest ($current)"
+    return
+  fi
+  echo "→ Updating yq: $current → $num"
+  install_release_binary "https://github.com/mikefarah/yq/releases/download/${latest}/yq_linux_$(dpkg --print-architecture)" \
+    "$(command -v yq)" || return 1
+  echo "✓ yq updated to $num"
+}
+
+update_sops() {
+  if ! ensure_command sops; then
+    echo "✓ sops not installed, skipping"
+    return
+  fi
+  local current latest num
+  # --disable-version-check: plain --version phones home to compare against the latest release
+  current=$(sops --version --disable-version-check 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  latest=$(get_github_latest_tag "getsops/sops") || return 1   # vX.Y.Z
+  num="${latest#v}"
+  if [[ "$current" == "$num" ]]; then
+    echo "✓ sops already at latest ($current)"
+    return
+  fi
+  echo "→ Updating sops: $current → $num"
+  install_release_binary "https://github.com/getsops/sops/releases/download/${latest}/sops-${latest}.linux.$(dpkg --print-architecture)" \
+    "$(command -v sops)" || return 1
+  echo "✓ sops updated to $num"
 }
 
 update_yazi() {
@@ -769,6 +828,8 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_LAZYGIT"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_STERN"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_GLOW"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_YQ"           == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$UPDATE_SOPS"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_YAZI"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_ATUIN"        == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$UPDATE_ASPIRE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -791,6 +852,8 @@ TOTAL_STEPS=1  # always: Done
 [[ "$UPDATE_LAZYGIT"     == "true" ]] && run_step "Updating lazygit"           --skip-lazygit      update_lazygit
 [[ "$UPDATE_STERN"       == "true" ]] && run_step "Updating stern"             --skip-stern        update_stern
 [[ "$UPDATE_GLOW"        == "true" ]] && run_step "Updating glow"              --skip-glow         update_glow
+[[ "$UPDATE_YQ"          == "true" ]] && run_step "Updating yq"                --skip-yq           update_yq
+[[ "$UPDATE_SOPS"        == "true" ]] && run_step "Updating sops"              --skip-sops         update_sops
 [[ "$UPDATE_YAZI"        == "true" ]] && run_step "Updating yazi"              --skip-yazi         update_yazi
 [[ "$UPDATE_ATUIN"        == "true" ]] && run_step "Updating atuin"             --skip-atuin        update_atuin
 [[ "$UPDATE_ASPIRE"      == "true" ]] && run_step "Updating Aspire CLI"        --skip-aspire       update_aspire

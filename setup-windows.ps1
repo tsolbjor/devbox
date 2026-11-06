@@ -72,6 +72,8 @@ $Config = @{
     "sharkdp.bat",               # bat
     "sharkdp.fd",                # fd
     "jqlang.jq",                 # jq
+    "MikeFarah.yq",              # yq — jq for YAML/TOML/XML
+    "SecretsOPerationS.SOPS",    # sops — encrypted secrets files (age / Azure Key Vault / KMS)
     "dandavison.delta",          # git-delta — wired into git by GitConfig.UseDelta
     "JesseDuffield.lazygit",     # lazygit
     "charmbracelet.glow",        # glow — rendered markdown in the terminal
