@@ -103,13 +103,37 @@ Installs and configures:
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (npm global) |
 | Languages | .NET SDK (10 LTS, newest feature band, in `~/.dotnet` — Ubuntu's apt feed stops at 1xx), Aspire CLI, `dotnet outdated` (NuGet's `ncu`), Python (venv/pip/pipx/uv) |
 | Azure | Azure Developer CLI (`azd`) — provisions and deploys an Aspire AppHost |
-| Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern, kubelogin (Entra auth for AKS) |
+| Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern, kubelogin (Entra auth for AKS); a kubeconfig per folder via direnv (below) |
 | Containers | verifies docker answers — on WSL, that Rancher Desktop's docker is wired in |
 | Git | user config (on WSL auto-detected from Windows), defaults, SSH commit signing, on WSL HTTPS auth via the Windows Git Credential Manager |
 | SSH | ed25519 key pair |
 | System | on WSL: /etc/wsl.conf (automount metadata, systemd — merged key by key, other settings kept) |
 
 After the script finishes it prints your SSH public key and next steps.
+
+### A kubeconfig per folder
+
+direnv (hooked into the generated shell config) exports `KUBECONFIG` from an
+`.envrc` when you `cd` into its tree and drops it when you leave, so kubectl, k9s,
+helm, stern and kubectx all see the cluster of the folder you are in. Put the
+`.envrc` in the folder *above* a client's repos — one file covers all of them, and
+no credentials path lands in a repo:
+
+```bash
+mkdir -p ~/.kube/clients && chmod 700 ~/.kube ~/.kube/clients
+echo 'export KUBECONFIG="$HOME/.kube/clients/acme.yaml"' > ~/code/acme/.envrc
+direnv allow ~/code/acme     # once, and again whenever the .envrc changes
+
+cd ~/code/acme/some-repo
+az aks get-credentials -g <rg> -n <cluster> --file "$KUBECONFIG"   # az ignores KUBECONFIG without --file
+kubelogin convert-kubeconfig -l azurecli                           # Entra clusters
+k9s
+```
+
+Each folder's `kubectx` / `kubens` switches only rewrite that folder's file, so two
+terminals in two clients never move each other's current context. Outside any
+`.envrc` tree, `~/.kube/config` applies as usual. To see the context in the prompt,
+set `[kubernetes] disabled = false` in `~/.config/starship.toml`.
 
 ## Customisation
 

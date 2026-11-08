@@ -43,6 +43,7 @@ APT_PACKAGES=(
   zsh
   file      # yazi's mime-type detection
   micro     # terminal editor with familiar keys (Ctrl+S, Ctrl+Q)
+  direnv    # per-directory env from .envrc — e.g. a client's KUBECONFIG, see README
 )
 
 # Optional installs
@@ -1411,8 +1412,9 @@ fi
 EDITOR
 }
 
-# zoxide, then starship LAST: zoxide hooks in after compinit (which oh-my-zsh ran
-# above), and starship's prompt must be the one left standing.
+# zoxide, then starship, then direnv: zoxide hooks in after compinit (which oh-my-zsh
+# ran above), starship's prompt must be the one left standing, and direnv's hook
+# must run before starship's on every prompt.
 render_devbox_prompt_tools() {
   local shell="$1"
   if [[ "$INSTALL_ZOXIDE" == "true" ]]; then
@@ -1425,10 +1427,18 @@ ZOX
   if [[ "$INSTALL_STARSHIP" == "true" ]]; then
     cat <<STAR
 
-# Starship renders the prompt — last, so no later init replaces it.
+# Starship renders the prompt — after every init that could replace it.
 if command -v starship >/dev/null 2>&1; then eval "\$(starship init $shell)"; fi
 STAR
   fi
+  cat <<DIRENV
+
+# direnv loads an allowed .envrc on entering its directory tree and unloads it on
+# leaving — how a client folder picks its own KUBECONFIG for kubectl, k9s, helm.
+# After starship: the hook puts itself first in the prompt hooks, so the prompt
+# already sees the new environment (and it hands \$? through untouched).
+if command -v direnv >/dev/null 2>&1; then eval "\$(direnv hook $shell)"; fi
+DIRENV
 }
 
 # The one block devbox keeps in ~/.zshrc / ~/.bashrc.
