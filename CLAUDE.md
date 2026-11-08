@@ -88,6 +88,13 @@ The audit reads effective values from a real `zsh -ic` (`HISTSIZE`, `SAVEHIST`, 
 
 Two traps worth remembering, both of which produced silent no-ops here: awk turns the `\$` of a `-v` value like `\$ZSH/oh-my-zsh.sh` into a bare `$` (end-of-line in ERE, matches nothing), so `migrate_rc_to_devbox_config` keeps its regexes inside the awk program, never in `-v`; and `grep -c` already prints `0` on no match, so a trailing `|| echo 0` yields `"0\n0"` and breaks every `[[ -eq ]]` downstream.
 
+## Documentation
+
+User docs live in `docs/` (`windows.md`, `ubuntu.md`, `maintenance.md`, `cheatsheet.md`, `CONTRIBUTING.md`). `README.md` stays short: a quick start and links. When what a script installs or configures changes, update the matching `docs/` page.
+
+- **`docs/adr/`** holds architecture decision records: numbered, never rewritten, copied from `docs/adr/template.md`, and indexed in `docs/adr/README.md`. Before reversing something that looks deliberate, check for an ADR. A reversal gets a new ADR that supersedes the old one. A change that makes a real design choice (a new install channel, a new managed file, a new cross-platform convention) gets an ADR in the same PR.
+- **`docs/plans/`** holds planned work that is not implemented yet (`YYYY-MM-DD-title.md`, indexed in `docs/plans/README.md`). When an item lands, check it off with the commit. When a plan settles a decision, write the ADR and link it from the plan. The current open plan is `docs/plans/2026-11-08-stack-review.md`, so look there before starting new review work.
+
 ## DevContainer
 
 `.devcontainer/` defines an Ubuntu 22.04 container used when developing inside this repo via VS Code. Git identity is injected via `containerEnv` in `devcontainer.json` — edit those values to personalise.

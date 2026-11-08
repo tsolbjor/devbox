@@ -43,7 +43,7 @@ APT_PACKAGES=(
   zsh
   file      # yazi's mime-type detection
   micro     # terminal editor with familiar keys (Ctrl+S, Ctrl+Q)
-  direnv    # per-directory env from .envrc — e.g. a client's KUBECONFIG, see README
+  direnv    # per-directory env from .envrc — e.g. a client's KUBECONFIG, see docs/ubuntu.md
 )
 
 # Optional installs

@@ -133,7 +133,7 @@ function Install-WingetPackage {
 
 ## Documentation Standards
 
-- Keep README.md up to date with script capabilities
+- Keep README.md and docs/ (windows.md, ubuntu.md, maintenance.md) up to date with script capabilities; record design decisions in docs/adr/ and planned work in docs/plans/
 - Document all configuration options with examples
 - Include system requirements clearly
 - Provide quick start instructions for both Windows and Ubuntu

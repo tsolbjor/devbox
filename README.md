@@ -3,65 +3,29 @@
 Automated, idempotent setup scripts for a Windows + WSL2 development environment.
 The Ubuntu scripts also run on a standalone (native) Ubuntu machine.
 
-> 📄 **New here?** See the [**terminal cheatsheet**](CHEATSHEET.md) for WezTerm, Starship,
+> 📄 **New here?** See the [**terminal cheatsheet**](docs/cheatsheet.md) for WezTerm, Starship,
 > and CLI-addon keyboard shortcuts and how-tos.
-
-## Prerequisites
-
-**Windows** (`setup-windows.ps1`)
-- Windows 10/11 with WSL support
-- [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/) (App Installer from the Microsoft Store)
-- PowerShell run as Administrator
-
-**Ubuntu** (`setup-ubuntu.sh`)
-- Ubuntu 20.04 LTS or later — inside WSL2, or native
-- sudo access
 
 ## Quick Start
 
 ### 1. Windows
 
-A blank, Entra-joined PC has no Git and (usually) no `D:` drive yet, so start with
-the **bootstrap**. Open **PowerShell as Administrator** and run:
+On a blank PC (no Git, no `D:` drive yet), open **PowerShell as Administrator**:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 irm https://raw.githubusercontent.com/tsolbjor/devbox/main/bootstrap-windows.ps1 | iex
 ```
 
-`bootstrap-windows.ps1` verifies winget, installs Git, creates a **Dev Drive** at
-`D:` (a VHDX-backed ReFS volume — needs no free partition, re-attached at boot),
-and clones this repo to `D:\code\devbox`. It installs no apps and doesn't touch
-WSL — it just prepares the ground, then prints the next command.
-
-Then run the full setup from the cloned folder:
+This installs Git, creates a Dev Drive at `D:` and clones this repo to
+`D:\code\devbox`. Then run the full setup:
 
 ```powershell
 Set-Location D:\code\devbox
 .\setup-windows.ps1
 ```
 
-> Already have Git and a `D:` drive? Skip the bootstrap — clone the repo and run
-> `.\setup-windows.ps1` directly.
-
-Installs and configures:
-
-| Category | What gets set up |
-|---|---|
-| Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip, Node.js via fnm (host), Azure Functions Core Tools, Aspire CLI |
-| CLI tools | ripgrep, bat, fd, jq, yq, sops, git-delta, lazygit, glow, yazi, micro, GitHub CLI — the same basics `setup-ubuntu.sh` installs, so pwsh matches the WSL shell |
-| Agentic CLIs | Claude Code (native install, self-updating), Codex (winget) |
-| Fonts | Cascadia Code, JetBrains Mono Nerd Font |
-| Cloud CLIs | Azure CLI, Azure Developer CLI (`azd`), kubelogin (Entra auth for AKS) — add AWS CLI / Google Cloud SDK via `CloudCLIs` |
-| VS Code | Remote WSL, Dev Containers, Docker extensions |
-| WSL | Ubuntu distro, resource limits (75% RAM/CPU), mirrored networking, swap disabled when allocated RAM ≥ 16 GB |
-| Rancher Desktop | moby engine (Docker-compatible), Kubernetes enabled |
-| WezTerm | JetBrains Mono Nerd Font, One Half Dark scheme, bar cursor, bell off; opens Ubuntu by default; local panes run pwsh (not cmd); Ctrl+Shift+1/2 switch pwsh (D:\code) / Ubuntu; Ctrl+Shift+3 opens a dev-layout tab (Claude Code \| yazi / shell) in the current directory; Ctrl+Shift+Alt+arrows split in any direction, inheriting the pane's shell and directory |
-| PowerShell prompt | Starship (nerd-font-symbols preset) for PS5 and PS7 |
-| PowerShell UX | fzf + PSFzf (Ctrl+T / Ctrl+R), PSReadLine predictive IntelliSense (ListView) |
-| Package caches | npm + NuGet caches relocated onto the `D:` Dev Drive (per-user env vars) |
-| System | Long path support, OpenSSH Agent, Defender exclusion for WSL vhdx |
-| Git | identity (auto-detected from the Entra user unless already set), autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote, delta as the diff pager |
+Details, what gets installed and how to customise it: [docs/windows.md](docs/windows.md).
 
 ### 2. Ubuntu (WSL or native)
 
@@ -71,176 +35,32 @@ Inside your Ubuntu terminal:
 bash setup-ubuntu.sh
 ```
 
-The script detects where it runs (`DEVBOX_ENV=auto`) and prints it first:
+On WSL, Git name/email auto-detect from the Windows (Entra) user; on a fresh native
+machine export `GIT_NAME` / `GIT_EMAIL` first. Details: [docs/ubuntu.md](docs/ubuntu.md).
 
-| | WSL | Native Ubuntu |
-|---|---|---|
-| `/etc/wsl.conf` | merged | skipped |
-| Git identity | existing Git config, else the Windows (Entra) user | existing Git config, else `GIT_NAME`/`GIT_EMAIL` required |
-| HTTPS Git auth | Git for Windows' Credential Manager | none set — `gh auth login` covers GitHub |
-| Docker | checks Rancher Desktop's WSL integration | checks any engine answers; installs none |
-
-Force either path with `DEVBOX_ENV=wsl` / `DEVBOX_ENV=native` (a container always detects as native).
-
-Unless the global Git config already has them, Git name/email auto-detect on WSL from
-the logged-in Windows (Entra) user — email from the UPN (`whoami.exe /upn`), name
-from the Windows logon display name. Override by exporting them first (required
-on a fresh native machine), or set `AUTO_DETECT_GIT_IDENTITY=false` to disable:
-
-```bash
-export GIT_NAME="Your Name"
-export GIT_EMAIL="your@email.com"
-bash setup-ubuntu.sh
-```
-
-Installs and configures:
-
-| Category | What gets set up |
-|---|---|
-| Shell | zsh (set as default), Starship, fzf, zoxide, zsh-autosuggestions + zsh-syntax-highlighting — all configured in a generated `~/.config/devbox/<shell>rc`; your `~/.zshrc`/`~/.bashrc` only gets one loader block, and stays yours |
-| Shell UX | 200 000-line history for bash and zsh (flushed per command), inline suggestions in a readable colour, PSReadLine-style accept keys (`→`, `Ctrl+→`, `Tab`), `Ctrl+R` history picker |
-| Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, yq, sops, wget, zip, git-delta, lazygit, glow, yazi, micro, GitHub CLI, Node.js via fnm |
-| Agentic CLIs | Claude Code (native install, self-updating), Codex (npm global) |
-| Languages | .NET SDK (10 LTS, newest feature band, in `~/.dotnet` — Ubuntu's apt feed stops at 1xx), Aspire CLI, `dotnet outdated` (NuGet's `ncu`), Python (venv/pip/pipx/uv) |
-| Azure | Azure Developer CLI (`azd`) — provisions and deploys an Aspire AppHost |
-| Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern, kubelogin (Entra auth for AKS); a kubeconfig per folder via direnv (below) |
-| Containers | verifies docker answers — on WSL, that Rancher Desktop's docker is wired in |
-| Git | user config (on WSL auto-detected from Windows), defaults, SSH commit signing, on WSL HTTPS auth via the Windows Git Credential Manager |
-| SSH | ed25519 key pair |
-| System | on WSL: /etc/wsl.conf (automount metadata, systemd — merged key by key, other settings kept) |
-
-After the script finishes it prints your SSH public key and next steps.
-
-### A kubeconfig per folder
-
-direnv (hooked into the generated shell config) exports `KUBECONFIG` from an
-`.envrc` when you `cd` into its tree and drops it when you leave, so kubectl, k9s,
-helm, stern and kubectx all see the cluster of the folder you are in. Put the
-`.envrc` in the folder *above* a client's repos — one file covers all of them, and
-no credentials path lands in a repo:
-
-```bash
-mkdir -p ~/.kube/clients && chmod 700 ~/.kube ~/.kube/clients
-echo 'export KUBECONFIG="$HOME/.kube/clients/acme.yaml"' > ~/code/acme/.envrc
-direnv allow ~/code/acme     # once, and again whenever the .envrc changes
-
-cd ~/code/acme/some-repo
-az aks get-credentials -g <rg> -n <cluster> --file "$KUBECONFIG"   # az ignores KUBECONFIG without --file
-kubelogin convert-kubeconfig -l azurecli                           # Entra clusters
-k9s
-```
-
-Each folder's `kubectx` / `kubens` switches only rewrite that folder's file, so two
-terminals in two clients never move each other's current context. Outside any
-`.envrc` tree, `~/.kube/config` applies as usual. To see the context in the prompt,
-set `[kubernetes] disabled = false` in `~/.config/starship.toml`.
-
-## Customisation
-
-Both scripts have a `PARAMETERS` section at the very top — edit values there before running. No changes to the implementation section are needed for common adjustments.
-
-**Windows** — remove entries from `Fonts`, `CloudCLIs`, or `VSCodeExtensions`; change the `Starship.Preset` or the `WezTermConfig` appearance/`PwshStartDir`; override `WslConfig` memory/CPU values explicitly instead of auto-detecting; toggle `DevDrivePackageCaches` (or repoint `Root`) to control npm/NuGet cache relocation.
-
-**Bootstrap** (`bootstrap-windows.ps1`) — edit the `DevDrive` block to change the drive `Letter`, `SizeGB` (VHDX max — expandable, so it only uses real disk as it fills), or `VhdxPath`; set `Create = $false` to reuse an existing `D:`. `Repo.Url` / `CloneRoot` control where the repo lands. These only apply if you clone the repo first and run the script locally — the `irm … | iex` one-liner runs the defaults.
-
-**Ubuntu** — set `INSTALL_KUBECTL=false` to skip Kubernetes tools; toggle `INSTALL_DOTNET` / `INSTALL_PYTHON` (or pin `DOTNET_SDK_VERSION`; a machine with apt's `dotnet-sdk-*` from an older setup is offered a move to `~/.dotnet` — `MIGRATE_APT_DOTNET=yes|no` answers for it); set `GIT_SIGN_COMMITS=false` to skip SSH commit signing; change `STARSHIP_PRESET` to any name from [starship.rs/presets](https://starship.rs/presets/) (or empty for the built-in default); set `WSL_ENABLE_SYSTEMD=false` on older Windows builds.
-
-## Keeping up to date
-
-Two maintenance scripts refresh an already-provisioned machine — they install
-nothing new, only upgrade what's there. Safe to rerun anytime.
+### 3. Keep it current
 
 ```powershell
-# Windows — as Administrator: OS updates, Defender defs, Store apps, WSL,
-# winget upgrade --all, latest Node patch (fnm), global npm packages
-.\update-windows.ps1
+.\update-windows.ps1    # as Administrator
+.\audit-windows.ps1     # read-only drift report
 ```
 
 ```bash
-# Ubuntu (WSL or native): apt upgrade + fnm and the latest Node patch, starship, zoxide,
-# git-delta, lazygit, stern, glow, yq, sops, yazi, k9s, kubectx, the .NET SDKs (newest feature band per major),
-# npm globals, pipx tools. Use --skip-<tool> to opt out.
 bash update-ubuntu.sh
+bash audit-ubuntu.sh
 ```
 
-Toggle individual steps in each script's `PARAMETERS` block (or via `--skip-*`
-flags / env vars on Ubuntu).
+Every script is safe to rerun. Updates, drift reports, version pins and ignore
+lists: [docs/maintenance.md](docs/maintenance.md).
 
-## Detecting drift
+## Documentation
 
-Over time a machine accumulates apps and config the setup process doesn't know
-about. The `audit-*` scripts report that drift — **read-only, they change
-nothing** (bar `audit-windows.ps1 -Triage`, which edits only its own ignore
-list) — and derive "expected" state by parsing the setup scripts themselves,
-so they can't fall out of sync with what setup actually does.
-
-```powershell
-# Windows: winget apps / VS Code extensions / npm globals not in (or missing
-# from) setup, plus managed-config drift (WezTerm, PowerShell profiles,
-# .wslconfig, cache env vars, Git)
-.\audit-windows.ps1
-```
-
-```bash
-# Ubuntu (WSL or native): expected CLIs, managed rc blocks, starship.toml, /etc/wsl.conf (WSL),
-# Git, default shell, version pins, plus extra snap/pipx/npm/dotnet apps
-bash audit-ubuntu.sh              # add --apt-extras / --local-bin for noisier checks
-```
-
-### Version pins
-
-`setup-ubuntu.sh` pins the .NET SDK, kubectl and Node major versions. A rerun
-never swaps what an existing machine runs out from under you; the audit reports
-the gap, and reconciling it is an explicit step:
-
-```bash
-bash update-ubuntu.sh --pins      # asks before each; --pins-yes to accept all
-```
-
-- **.NET** needs no flag: SDKs install side by side, so a plain
-  `bash setup-ubuntu.sh` adds the pinned SDK and leaves the old one in place.
-- **Node** comes from [fnm](https://github.com/Schniz/fnm), and the pin is only
-  its *default* — a project's `.nvmrc` / `.node-version` wins inside that
-  directory. A setup rerun installs the pinned major alongside; `--pins` makes it
-  the default. npm globals live in `~/.local` (`%APPDATA%\npm` on Windows),
-  shared by every Node version, so they survive both.
-- **kubectl** replaces the installed minor, so only `--pins` moves it.
-
-Each finding prints a two-way reconcile hint: how to **fix** the drift (rerun
-setup, install/uninstall) and, for unexpected apps, how to **adopt** it into
-setup (add to a `$Config` array / `APT_PACKAGES` / an `ensure_*` step) — so the
-report doubles as a worklist for updating the setup scripts.
-
-### Silencing what is neither
-
-Most machines carry software that is neither drift nor setup-worthy — 1Password,
-Office, a browser, the runtime redistributables other installers drag in. There
-is no honest `fix:` or `adopt:` for those, and left unanswered they bury the
-findings that matter. Both audits take an ignore list for exactly that third
-answer, and Windows can fill it interactively:
-
-```powershell
-.\audit-windows.ps1 -Triage
-```
-
-This walks each category of *Extra* finding through a checkbox picker (`↑`/`↓`,
-`Space` to tick, `A`/`N` for all/none, `Enter` to confirm, `Esc` to skip) and
-folds what you ticked into `$Config.Ignore` in `audit-windows.ps1` itself. It is
-the one mode that writes anything — and only to that file, so the change lands in
-git where you can read it before committing. Nothing on the machine is touched.
-
-`$Config.Ignore.Patterns` takes regexes for families that would otherwise need a
-dozen literal entries each; it ships pre-seeded with the VC++ / WindowsAppRuntime
-/ UI.Xaml runtimes. On Ubuntu the same lists are the `IGNORE_*` variables at the
-top of `audit-ubuntu.sh` (space-separated; `IGNORE_PATTERNS` holds regexes),
-edited by hand — there is no `--triage` there yet.
-
-## System requirements
-
-| | Minimum |
+| | |
 |---|---|
-| Windows | Windows 10/11 (Home, Pro, or Enterprise) |
-| RAM | 16 GB recommended (scripts allocate 75% to WSL) |
-| Dev Drive | ReFS Dev Drive at `D:` needs Windows 11 22H2 (build 22621.2338+); older builds fall back to an NTFS volume automatically |
-| WSL networking | `networkingMode=mirrored` requires Windows 11 22H2+ |
-| Systemd in WSL | Requires Windows 11 22H2+ / WSL 2.0 |
+| [docs/windows.md](docs/windows.md) | Windows bootstrap and setup: what gets installed, customisation, requirements |
+| [docs/ubuntu.md](docs/ubuntu.md) | Ubuntu / WSL setup, WSL vs native, a kubeconfig per folder |
+| [docs/maintenance.md](docs/maintenance.md) | Update scripts, drift audits, version pins |
+| [docs/cheatsheet.md](docs/cheatsheet.md) | Terminal keyboard shortcuts and how-tos |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Working on the scripts: conventions, testing |
+| [docs/adr/](docs/adr/) | Architecture decision records — why things are the way they are |
+| [docs/plans/](docs/plans/) | Planned work that is not implemented yet |

@@ -71,10 +71,10 @@ CI runs on every push and pull request: shellcheck and PSScriptAnalyzer, a check
 docker run --rm -v "$PWD:/src:ro" ubuntu:24.04 bash /src/.github/ci/ubuntu-idempotency.sh
 ```
 
-The Windows script has no end-to-end CI (winget, WSL and Rancher Desktop don't run on a hosted runner). Run it on a clean machine, then again — the second run should produce only `✓` lines. Save `.ps1` files as UTF-8 with a BOM (`bootstrap-windows.ps1`: pure ASCII) — see CLAUDE.md.
+The Windows script has no end-to-end CI (winget, WSL and Rancher Desktop don't run on a hosted runner). Run it on a clean machine, then again — the second run should produce only `✓` lines. Save `.ps1` files as UTF-8 with a BOM (`bootstrap-windows.ps1`: pure ASCII) — see [CLAUDE.md](../CLAUDE.md) and [ADR 0012](adr/0012-powershell-utf8-bom.md).
 
 For the Windows script, the Rancher Desktop function requires that app to have been launched at least once before its settings file exists. WezTerm needs no prior launch — the script writes a managed `~/.wezterm.lua` directly.
 
 ## Submitting changes
 
-Open a pull request against `main`. Keep changes focused — one logical change per PR. The scripts are the product; update the README if what gets installed or configured changes.
+Open a pull request against `main`. Keep changes focused — one logical change per PR. The scripts are the product; update the docs (`README.md`, `docs/windows.md`, `docs/ubuntu.md`) if what gets installed or configured changes. A significant design decision gets an ADR in `docs/adr/`; work planned for later goes in `docs/plans/`.
