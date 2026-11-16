@@ -113,12 +113,19 @@ CURRENT_STEP=0
 TOTAL_STEPS=0
 
 # Run a step; on failure, report and suggest the matching --skip flag.
-# set -e is suppressed inside a function called as an `if` condition, so a
-# failing command returns non-zero here instead of aborting the script.
+# The step runs in a subshell started *outside* any condition, so set -e and
+# pipefail stay in force inside it. Called as `if ! "$fn"` instead, bash would
+# suspend set -e for the whole function: a failed sudo or `curl | sudo tar`
+# fell straight through to the step's "✓ updated" line. Steps share no state
+# (each activates fnm/dotnet itself), so the subshell costs nothing.
 run_step() {
-  local label="$1" skip_flag="$2" fn="$3"
+  local label="$1" skip_flag="$2" fn="$3" rc
   log "$label"
-  if ! "$fn"; then
+  set +e
+  ( set -e; "$fn" )
+  rc=$?
+  set -e
+  if (( rc != 0 )); then
     echo "⚠ '$label' failed. Re-run with $skip_flag to skip this step."
     exit 1
   fi
@@ -157,8 +164,8 @@ fnm_default_version() {
 # Latest release tag of a GitHub repo, or a non-zero return with a reason (see
 # gh_latest_tag in setup-ubuntu.sh: authenticated when a token is to hand, since
 # the anonymous 60 calls/hour are shared by everyone behind a corporate NAT).
-# Callers must `|| return 1` — run_step invokes them as an `if` condition, which
-# suspends set -e, so an empty tag would otherwise sail on into a broken URL.
+# Callers write `|| return 1`: set -e does not fire on a failed `$(...)` inside
+# `local x=$(...)`, so an empty tag would otherwise sail on into a broken URL.
 get_github_latest_tag() {
   local repo="$1" tag token="${GITHUB_TOKEN:-${GH_TOKEN:-}}" auth=()
   if [[ -z "$token" ]] && ensure_command gh; then
@@ -527,11 +534,16 @@ update_azd() {
     echo "✓ azd not installed, skipping"
     return
   fi
-  local current latest num
+  local current num after
   current=$(azd version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
-  # azd tags its releases azure-dev-cli_<version>, not v<version>.
-  latest=$(get_github_latest_tag "Azure/azure-dev") || return 1
-  num="${latest##*_}"
+  # Not GitHub's releases/latest: Azure/azure-dev also publishes its extensions
+  # there (azd-ext-azure-ai-agents_1.1.0), so "latest" is often not the CLI at
+  # all. This is the endpoint azd's own update check reads.
+  num=$(curl -fsSL https://aka.ms/azure-dev/versions/cli/latest | tr -d '[:space:]') || true
+  if [[ ! "$num" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "⚠ Could not resolve the latest azd version (got '${num}')" >&2
+    return 1
+  fi
   if [[ "$current" == "$num" ]]; then
     echo "✓ azd already at latest ($current)"
     return
@@ -540,7 +552,12 @@ update_azd() {
   # Same call as ensure_azd in setup-ubuntu.sh — no sudo; the installer elevates
   # only the steps that need it.
   curl -fsSL https://aka.ms/install-azd.sh | bash
-  echo "✓ azd updated to $(azd version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  after=$(azd version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+  if [[ "$after" != "$num" ]]; then
+    echo "⚠ azd is at '${after}' after the install, expected $num" >&2
+    return 1
+  fi
+  echo "✓ azd updated to $num"
 }
 
 # Put DOTNET_INSTALL_DIR on PATH for this script (see activate_dotnet in setup-ubuntu.sh).
