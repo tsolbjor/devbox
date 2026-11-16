@@ -775,9 +775,22 @@ if ((Get-Module PSReadLine).Version -ge [version]'2.2.0') {
   }
   Set-PSReadLineOption -Colors $colors
 }
-if (Get-Module -ListAvailable PSFzf) {
-  Import-Module PSFzf
-  Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r'
+# PSFzf takes 1-2 s to import (far more cold, when Documents is OneDrive-backed),
+# so Ctrl+T / Ctrl+R import it on first press; Set-PsFzfOption then rebinds both
+# chords to PSFzf's own handlers. The presence check is a folder test, not
+# Get-Module -ListAvailable, which reads every module manifest on PSModulePath.
+if ($env:PSModulePath -split [IO.Path]::PathSeparator |
+    Where-Object { $_ -and (Test-Path (Join-Path $_ 'PSFzf')) }) {
+  Set-PSReadLineKeyHandler -Chord 'Ctrl+t' -BriefDescription 'PSFzf provider (loads PSFzf)' -ScriptBlock {
+    Import-Module PSFzf -Global
+    Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r'
+    Invoke-FzfPsReadlineHandlerProvider
+  }
+  Set-PSReadLineKeyHandler -Chord 'Ctrl+r' -BriefDescription 'PSFzf history (loads PSFzf)' -ScriptBlock {
+    Import-Module PSFzf -Global
+    Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r'
+    Invoke-FzfPsReadlineHandlerHistory
+  }
 }
 # --- end devbox block ---
 '@
