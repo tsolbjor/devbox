@@ -2090,6 +2090,8 @@ if ensure_command fdfind && ! ensure_command fd; then
     mkdir -p "$HOME/.local/bin"
     ln -s "$(command -v fdfind)" "$HOME/.local/bin/fd"
   fi
+elif ensure_command fd; then
+  echo "✓ fd available: $(command -v fd)"
 fi
 
 log "Ensuring code directory"
