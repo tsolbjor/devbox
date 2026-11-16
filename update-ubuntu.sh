@@ -35,7 +35,7 @@ FNM_DIR="${FNM_DIR:-$HOME/.local/share/fnm}"         # keep in step with setup-u
 UPDATE_PINS="${UPDATE_PINS:-false}"                  # --pins
 PINS_ASSUME_YES="${PINS_ASSUME_YES:-false}"          # --pins-yes: take every prompt as yes
 UPDATE_OMZ="${UPDATE_OMZ:-true}"                   # oh-my-zsh self-update (git pull of ~/.oh-my-zsh)
-UPDATE_NPM_GLOBALS="${UPDATE_NPM_GLOBALS:-true}"   # npm update -g if npm is available
+UPDATE_NPM_GLOBALS="${UPDATE_NPM_GLOBALS:-true}"   # reinstall outdated npm globals if npm is available
 UPDATE_PIPX="${UPDATE_PIPX:-true}"                 # pipx upgrade-all (updates uv and other pipx tools)
 
 # =========================
@@ -824,15 +824,40 @@ update_npm_globals() {
   # update is actually available. Only reach for sudo when the prefix really isn't
   # ours — a user-level prefix (npm config set prefix ~/...) must update unelevated,
   # or root would rewrite that tree's ownership out from under the user.
-  local prefix
+  #
+  # Not `npm update -g`: it rebuilds the ideal tree of every global, re-resolving each
+  # transitive dependency against the registry even when nothing changed — minutes for
+  # a global like sanity with ~1,100 of them. `npm outdated -g` answers the same
+  # question in seconds; only the outdated packages are then reinstalled, at `wanted`,
+  # which for a global is what `npm update -g` would move it to (latest, across majors).
+  # npm outdated exits 1 whenever something is outdated, so its JSON is the result.
+  local prefix json rc=0 sudo_cmd=()
   prefix="$(npm prefix -g 2>/dev/null || true)"
   if [[ -n "$prefix" && ! -w "${prefix}/lib/node_modules" ]]; then
-    echo "→ Updating global npm packages (root-owned prefix: $prefix)"
-    sudo npm update -g
-  else
-    echo "→ Updating global npm packages"
-    npm update -g
+    sudo_cmd=(sudo)
   fi
+  json="$(npm outdated -g --json 2>/dev/null)" || rc=$?
+  if (( rc > 1 )) || [[ "$json" != \{* ]]; then
+    echo "⚠ npm outdated -g failed (exit $rc)" >&2
+    return 1
+  fi
+  # name@wanted per outdated global; a linked package (npm link) is a working copy, not
+  # something to replace from the registry.
+  local specs=()
+  mapfile -t specs < <(node -e '
+    const fs = require("fs");
+    const o = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+    for (const [name, v] of Object.entries(o)) {
+      if (!v.current || !v.wanted || v.current === v.wanted) continue;
+      try { if (v.location && fs.lstatSync(v.location).isSymbolicLink()) continue; } catch {}
+      console.log(`${name}@${v.wanted}`);
+    }' <<<"$json")
+  if (( ${#specs[@]} == 0 )); then
+    echo "✓ global npm packages up to date"
+    return
+  fi
+  echo "→ Updating global npm packages${sudo_cmd:+ (root-owned prefix: $prefix)}: ${specs[*]}"
+  "${sudo_cmd[@]}" npm install -g "${specs[@]}"
   echo "✓ global npm packages up to date"
 }
 

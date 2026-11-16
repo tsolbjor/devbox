@@ -10,7 +10,7 @@ $Config = @{
   UpdatePSModules    = $false  # Update-Module — all installed PowerShell modules (slow, low payoff)
   WingetUpgradeAll   = $true   # winget upgrade --all
   UpdateNode         = $true   # latest patch of the fnm default Node major (fnm itself rides winget)
-  UpdateNpmGlobals   = $true   # npm update -g (in-range updates) if npm is available
+  UpdateNpmGlobals   = $true   # reinstall outdated npm globals (npm outdated -g) if npm is available
 }
 
 # =========================
@@ -213,9 +213,36 @@ function Update-NpmGlobals {
     Write-Host "✓ npm not found, skipping global npm package updates." -ForegroundColor Green
     return
   }
-  Write-Host "→ Updating global npm packages" -ForegroundColor Cyan
-  $out = Invoke-NativeCaptured { npm update -g }
-  if ($LASTEXITCODE -ne 0) { throw "npm update -g failed (exit $LASTEXITCODE)" }
+  # Not `npm update -g`: it rebuilds the ideal tree of every global, re-resolving each
+  # transitive dependency against the registry even when nothing changed — minutes for
+  # a global with a large tree. `npm outdated -g` answers the same question in seconds;
+  # only the outdated packages are then reinstalled, at `wanted`, which for a global is
+  # what `npm update -g` would move it to. It exits 1 whenever something is outdated,
+  # so the JSON is the result, not the exit code.
+  $json = $null
+  try {
+    $ErrorActionPreference = "Continue"
+    $json = (npm outdated -g --json 2>$null) | Out-String
+    $exit = $LASTEXITCODE
+  } finally { $ErrorActionPreference = "Stop" }
+  if ($exit -gt 1 -or $json -notmatch '^\s*\{') { throw "npm outdated -g failed (exit $exit)" }
+  $outdated = $json | ConvertFrom-Json
+  $specs = @(foreach ($p in $outdated.PSObject.Properties) {
+    $v = $p.Value
+    if (-not $v.PSObject.Properties['current'] -or -not $v.current -or $v.current -eq $v.wanted) { continue }
+    # A linked package (npm link) is a working copy, not something to replace from the registry.
+    if ($v.PSObject.Properties['location'] -and $v.location -and (Test-Path -LiteralPath $v.location)) {
+      if ((Get-Item -LiteralPath $v.location -Force).LinkType) { continue }
+    }
+    "$($p.Name)@$($v.wanted)"
+  })
+  if (-not $specs) {
+    Write-Host "✓ global npm packages up to date" -ForegroundColor Green
+    return
+  }
+  Write-Host "→ Updating global npm packages: $($specs -join ' ')" -ForegroundColor Cyan
+  $out = Invoke-NativeCaptured { npm install -g @specs }
+  if ($LASTEXITCODE -ne 0) { throw "npm install -g $($specs -join ' ') failed (exit $LASTEXITCODE)" }
   # npm runs no install script it has not been told to allow (allow-scripts), and
   # only warns. A package whose postinstall fetches its binary (azure-functions-
   # core-tools, esbuild) then keeps the old one or none. Allowing them is a trust
