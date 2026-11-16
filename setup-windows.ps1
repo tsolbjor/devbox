@@ -1470,11 +1470,11 @@ function Enable-OpenSSHAgent {
 $script:currentStep = 0
 $script:totalSteps  = 0
 
+# No Write-Progress: its bar stays up while winget/npm write, and when their
+# output scrolls the window the bar puts back the stale text it drew over.
 function Show-Progress {
   param([Parameter(Mandatory=$true)][string]$Status)
   $script:currentStep++
-  $pct = [int]($script:currentStep / $script:totalSteps * 100)
-  Write-Progress -Activity "devbox setup" -Status "[$($script:currentStep)/$($script:totalSteps)] $Status" -PercentComplete $pct
   Write-Host "`n[$($script:currentStep)/$($script:totalSteps)] $Status" -ForegroundColor White
 }
 
@@ -1641,7 +1641,6 @@ if ($Config.EnableOpenSSHAgent)     { Enable-OpenSSHAgent }
 if ($Config.ExcludeWslFromDefender) { Add-WslDefenderExclusion }
 if ($Config.DevDrivePackageCaches.Configure) { Ensure-DevDrivePackageCaches -Spec $Config.DevDrivePackageCaches }
 
-Write-Progress -Activity "devbox setup" -Completed
 if ($script:FailedInstalls.Count -gt 0) {
   Write-Host "`nDone, but $($script:FailedInstalls.Count) winget install(s) failed:" -ForegroundColor Yellow
   $script:FailedInstalls | ForEach-Object { Write-Host "  ⚠ $_" -ForegroundColor Yellow }

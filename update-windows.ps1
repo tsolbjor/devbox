@@ -164,8 +164,14 @@ function Update-Node {
   fnm install $latest
   if ($LASTEXITCODE -ne 0) { throw "fnm install $latest failed (exit $LASTEXITCODE)" }
   fnm default $latest
-  fnm uninstall $current
+  if ($LASTEXITCODE -ne 0) { throw "fnm default $latest failed (exit $LASTEXITCODE)" }
   Write-Host "✓ node now $latest (fnm default)" -ForegroundColor Green
+  # Fails with "Access is denied" while a node.exe from it still runs (an editor's
+  # language server, a dev server); the new default is in place either way.
+  fnm uninstall $current
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "⚠ could not remove node $current (still in use?) — close what runs it, then: fnm uninstall $current" -ForegroundColor Yellow
+  }
 }
 
 function Update-NpmGlobals {
@@ -182,11 +188,11 @@ function Update-NpmGlobals {
 $script:currentStep = 0
 $script:totalSteps  = 0
 
+# No Write-Progress: its bar stays up while winget/npm write, and when their
+# output scrolls the window the bar puts back the stale text it drew over.
 function Show-Progress {
   param([Parameter(Mandatory=$true)][string]$Status)
   $script:currentStep++
-  $pct = [int]($script:currentStep / $script:totalSteps * 100)
-  Write-Progress -Activity "devbox update" -Status "[$($script:currentStep)/$($script:totalSteps)] $Status" -PercentComplete $pct
   Write-Host "`n[$($script:currentStep)/$($script:totalSteps)] $Status" -ForegroundColor White
 }
 
@@ -236,7 +242,6 @@ if ($Config.WingetUpgradeAll) { Invoke-Step "Upgrading all winget packages"    {
 if ($Config.UpdateNode)       { Invoke-Step "Updating Node (fnm)"              { Update-Node } }
 if ($Config.UpdateNpmGlobals) { Invoke-Step "Updating global npm packages"     { Update-NpmGlobals } }
 
-Write-Progress -Activity "devbox update" -Completed
 Show-Progress "Done"
 if ($script:failures.Count -gt 0) {
   Write-Host "`nCompleted with failures in $($script:failures.Count) step(s):" -ForegroundColor Yellow
