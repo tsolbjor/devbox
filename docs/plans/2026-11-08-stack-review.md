@@ -76,9 +76,10 @@ Those two choices cause most of the findings below.
   (`setup-windows.ps1:556`) after the app installs but before the failed-installs
   summary at `:1646`. The run reports success. Fix: print the failures and exit
   non-zero before the reboot exit, or run `Ensure-WSL` first.
-- [ ] **B3. The Windows audit always reports drift for the font.** `audit-windows.ps1:295`
+- [x] **B3. The Windows audit always reports drift for the font.** `audit-windows.ps1:295`
   expects `NERD-Fonts.JetBrainsMono` from winget, but setup installs it from a zip
   (`setup-windows.ps1:1576-1588`). Fix: skip it in the audit, or check by font face.
+  Done 2026-11-16: both — skipped in the winget list, checked by face under "Managed config".
 - [ ] **B4. `update-ubuntu.sh` stops at the first failing step.** `run_step` calls
   `exit 1`, so one flaky GitHub lookup skips the rest of the refresh. Fix: record the
   failure, carry on, and exit non-zero at the end, as the Windows scripts do.
@@ -112,10 +113,12 @@ Those two choices cause most of the findings below.
   Done for `winget upgrade --all` and `npm update -g` (2026-11-16, `Invoke-NativeCaptured`
   in update-windows.ps1, which also warns about the per-user packages winget skips
   when elevated and the install scripts npm skips); the rest is still open.
-- [ ] **B9. Windows PowerShell 5.1 writes a BOM into generated files.**
+- [x] **B9. Windows PowerShell 5.1 writes a BOM into generated files.**
   `Set-Content -Encoding UTF8` puts one into `.wslconfig` (`:589`) and Rancher Desktop's
   `settings.json` (`:1065`). Whether those programs reject it is unverified. Fix:
   `[IO.File]::WriteAllText(..., [Text.UTF8Encoding]::new($false))`.
+  Done 2026-11-16 for both. `Set-Content` also appended a second line break to
+  `.wslconfig`, so it never compared equal and was rewritten on every run.
 - [ ] **B10. `2>$null` on native commands under `Stop` can throw on 5.1.**
   `setup-windows.ps1:264, :531, :1003, :1104`; `audit-windows.ps1:298, :370, :458`.
   Unverified which of those commands actually write to stderr.
@@ -159,8 +162,9 @@ Those two choices cause most of the findings below.
   Setup also ends without `exit 0`, so a stale `$LASTEXITCODE` can leak.
 - [ ] `wsl --install -d … | Out-Null` (`:537`) may hide the UNIX-username prompt; use
   `--no-launch`. `Test-Command wsl` is always true on Windows 11 (inbox stub).
-- [ ] The Defender exclusion covers only `CanonicalGroupLimited*\LocalState`; newer
-  distros live under `%LOCALAPPDATA%\wsl\{guid}` (unverified).
+- [x] The Defender exclusion covers only `CanonicalGroupLimited*\LocalState`; newer
+  distros live under `%LOCALAPPDATA%\wsl\{guid}` (unverified). Confirmed and done
+  2026-11-16: the targets now come from each distro's `BasePath` under HKCU `Lxss`.
 - [ ] Adding the npm prefix to the user PATH (`:1213`) stores it expanded as `REG_SZ`,
   flattening `%VAR%` entries.
 - [ ] The PATH refresh is copy-pasted six times and drops the fnm multishell entry.

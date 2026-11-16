@@ -89,9 +89,9 @@ $Config = @{
     "GitHub.cli"                 # gh
   )
 
-  # Fonts (winget IDs)
+  # Fonts (winget IDs). The Nerd Font is installed from its release zip, not winget
+  # (see WezTermConfig.FontDownloadUrl). Cascadia Code has no winget package.
   Fonts = @(
-    "Microsoft.CascadiaCode",
     "NERD-Fonts.JetBrainsMono"
   )
 
@@ -126,7 +126,7 @@ $Config = @{
     FontPackageId      = "NERD-Fonts.JetBrainsMono"
     FontDownloadUrl    = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.zip"
     FontArchiveFilter  = "JetBrainsMonoNerdFontMono-*.ttf"
-    FontFace           = "JetBrainsMono Nerd Font Mono"
+    FontFace           = "JetBrainsMono NFM"   # the family name Nerd Fonts v3 registers the Mono variant under on Windows
     FontFaceCandidates = @(
       "JetBrainsMono Nerd Font Mono",
       "JetBrainsMono NFM",
@@ -545,9 +545,15 @@ function Ensure-WSL {
     $restartNeeded = $true
   }
 
-  # Set default WSL version
-  Write-Host "→ Setting WSL default version to $DefaultVersion" -ForegroundColor Cyan
-  wsl --set-default-version $DefaultVersion | Out-Null
+  # Set default WSL version. wsl --set-default-version stores it here, and
+  # wsl --status prints it in UTF-16, so read the value instead of parsing that.
+  $lxss = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss" -ErrorAction SilentlyContinue
+  if ($lxss -and $lxss.PSObject.Properties['DefaultVersion'] -and $lxss.DefaultVersion -eq $DefaultVersion) {
+    Write-Host "✓ WSL default version is $DefaultVersion" -ForegroundColor Green
+  } else {
+    Write-Host "→ Setting WSL default version to $DefaultVersion" -ForegroundColor Cyan
+    wsl --set-default-version $DefaultVersion | Out-Null
+  }
 
   # Ensure distro is installed
   $distros = (wsl -l -q 2>$null) | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
@@ -608,7 +614,9 @@ function Ensure-WSLConfigFile {
 
   if ($current -ne $desiredText) {
     Write-Host "→ Writing $path" -ForegroundColor Cyan
-    Set-Content -Path $path -Value $desiredText -Encoding UTF8
+    # Exactly $desiredText: Set-Content would append another line break, so the file
+    # never compared equal and was rewritten on every run, and 5.1 adds a BOM.
+    [IO.File]::WriteAllText($path, $desiredText, [Text.UTF8Encoding]::new($false))
     Write-Host "✓ Updated .wslconfig (run: wsl --shutdown to apply without reboot)." -ForegroundColor Green
   } else {
     Write-Host "✓ .wslconfig already matches desired settings." -ForegroundColor Green
@@ -1109,9 +1117,13 @@ function Ensure-VSCodeExtensions {
 function Ensure-RancherDesktopConfig {
   param($RdConfig)
 
-  $settingsPath = Join-Path $env:APPDATA "rancher-desktop\settings.json"
-  if (-not (Test-Path $settingsPath)) {
-    Write-Warning "Rancher Desktop settings.json not found at $settingsPath. Launch Rancher Desktop once to initialise it, then rerun."
+  # Current releases keep settings.json under %LOCALAPPDATA%; older ones used %APPDATA%.
+  $settingsPath = @(
+    (Join-Path $env:LOCALAPPDATA "rancher-desktop\settings.json"),
+    (Join-Path $env:APPDATA "rancher-desktop\settings.json")
+  ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if (-not $settingsPath) {
+    Write-Warning "Rancher Desktop settings.json not found under $env:LOCALAPPDATA\rancher-desktop. Launch Rancher Desktop once to initialise it, then rerun."
     return
   }
 
@@ -1157,7 +1169,8 @@ function Ensure-RancherDesktopConfig {
 
   if ($changed) {
     Write-Host "→ Writing Rancher Desktop settings: $settingsPath" -ForegroundColor Cyan
-    ($settings | ConvertTo-Json -Depth 20) | Set-Content -Path $settingsPath -Encoding UTF8
+    # No BOM: Windows PowerShell 5.1's Set-Content -Encoding UTF8 writes one.
+    [IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
     Write-Host "✓ Rancher Desktop configured (restart Rancher Desktop to apply)." -ForegroundColor Green
   } else {
     Write-Host "✓ Rancher Desktop settings already match desired configuration." -ForegroundColor Green
@@ -1574,24 +1587,30 @@ function Show-Progress {
 }
 
 function Add-WslDefenderExclusion {
-  $packagesPath = Join-Path $env:LOCALAPPDATA "Packages"
   $existing = @((Get-MpPreference).ExclusionPath)
 
   $targets = [System.Collections.Generic.List[string]]::new()
 
-  # Ubuntu (and any other Store distro) vhdx lives under its package LocalState.
-  $wslDirs = Get-ChildItem -Path $packagesPath -Filter "CanonicalGroupLimited*" -Directory -ErrorAction SilentlyContinue
-  if (-not $wslDirs) {
-    Write-Warning "No WSL package directories found under $packagesPath. Run after WSL is installed."
-  }
-  foreach ($dir in $wslDirs) {
-    $localState = Join-Path $dir.FullName "LocalState"
-    if (Test-Path $localState) { [void]$targets.Add($localState) }
-  }
-
   # Rancher Desktop's WSL data disk (rancher-desktop / rancher-desktop-data vhdx).
   $rdData = Join-Path $env:LOCALAPPDATA "rancher-desktop"
   if (Test-Path $rdData) { [void]$targets.Add($rdData) }
+
+  # Every registered distro's vhdx folder, from WSL's own registry (BasePath). A
+  # Store distro keeps it under Packages\<publisher>\LocalState, but one from
+  # `wsl --install` on current WSL sits in %LOCALAPPDATA%\wsl\{guid}.
+  $lxss = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss"
+  $distros = @(Get-ChildItem $lxss -ErrorAction SilentlyContinue | ForEach-Object { Get-ItemProperty $_.PSPath } |
+    Where-Object { $_.PSObject.Properties['BasePath'] -and $_.BasePath })
+  if (-not $distros) {
+    Write-Warning "No WSL distros registered yet. Rerun after WSL is installed."
+  }
+  foreach ($d in $distros) {
+    $base = $d.BasePath -replace '^\\\\\?\\', ''
+    if (-not (Test-Path $base)) { continue }
+    # Already covered by the Rancher Desktop folder.
+    if ($base.StartsWith($rdData + '\', [StringComparison]::OrdinalIgnoreCase)) { continue }
+    if (-not $targets.Contains($base)) { [void]$targets.Add($base) }
+  }
 
   if ($targets.Count -eq 0) {
     Write-Warning "No WSL/Rancher data directories found to exclude yet. Rerun after WSL and Rancher Desktop are installed."

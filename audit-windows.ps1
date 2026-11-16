@@ -142,7 +142,7 @@ function Get-ExpectedNpmGlobals {
   $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($p in $Paths) {
     if (-not (Test-Path $p)) { continue }
-    foreach ($m in [regex]::Matches((Get-Content $p -Raw), 'npm\s+install\s+-g\s+([\w@\/.-]+)')) {
+    foreach ($m in [regex]::Matches((Get-Content $p -Raw), 'npm\s+install\s+-g\s+([\w@][\w@\/.-]*)')) {
       [void]$names.Add($m.Groups[1].Value)
     }
   }
@@ -293,6 +293,9 @@ if ($Config.CheckApps) {
     # Installed through a variable (Install-WingetPackage -Id $x), so the literal
     # scrape above cannot see them.
     foreach ($f in @($setup.Fonts) + @($setup.CloudCLIs) + @($setup.CliTools)) { if ($f) { [void]$expected.Add($f) } }
+    # Setup installs the Nerd Font from its release zip, so winget never lists it;
+    # "Managed config" checks the font face instead.
+    if ($setup.WezTermConfig.FontDownloadUrl) { [void]$expected.Remove($setup.WezTermConfig.FontPackageId) }
 
     $tmp = Join-Path $env:TEMP "devbox-winget-export.json"
     winget export -o $tmp --accept-source-agreements --disable-interactivity 2>$null | Out-Null
@@ -531,6 +534,19 @@ if ($Config.CheckConfigFiles) {
           )
         } else { Report-Ok "~/.wezterm.lua matches setup." }
       }
+    }
+
+    # The Nerd Font comes from a zip, not winget, so look for its face among the
+    # registered fonts ("JetBrainsMono NFM Regular (TrueType)", machine or per-user).
+    if ($wt.FontDownloadUrl) {
+      $fontNames = @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts",
+                     "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts") | ForEach-Object {
+        (Get-ItemProperty $_ -ErrorAction SilentlyContinue).PSObject.Properties.Name
+      }
+      $faces = @($wt.FontFace) + @($wt.FontFaceCandidates) | Where-Object { $_ } | Select-Object -Unique
+      $found = $faces | Where-Object { $face = $_; $fontNames | Where-Object { $_ -like "$face *" } } | Select-Object -First 1
+      if ($found) { Report-Ok "Nerd Font installed: $found." }
+      else { Report-Drift "No Nerd Font face installed ($($faces -join ', '))." @("fix: .\setup-windows.ps1") }
     }
   }
 

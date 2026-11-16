@@ -41,7 +41,7 @@ Set-Location D:\code\devbox
 | Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip, Node.js via fnm (host), Azure Functions Core Tools, Aspire CLI |
 | CLI tools | ripgrep, bat, fd, jq, yq, sops, git-delta, lazygit, glow, yazi, micro, GitHub CLI — the same basics `setup-ubuntu.sh` installs, so pwsh matches the WSL shell |
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (winget) |
-| Fonts | Cascadia Code, JetBrains Mono Nerd Font |
+| Fonts | JetBrains Mono Nerd Font (from its release zip; Cascadia Code ships with Windows) |
 | Cloud CLIs | Azure CLI (extensions in one shared `AZURE_EXTENSION_DIR`), Azure Developer CLI (`azd`, signing in through az), kubelogin (Entra auth for AKS), k9s, kubectx, kubens, stern — add AWS CLI / Google Cloud SDK via `CloudCLIs`. kubectl and helm come with Rancher Desktop |
 | Per-folder env | mise, activated in the PS5 and PS7 profiles: a client's `KUBECONFIG` and `AZURE_CONFIG_DIR` per folder (below) |
 | VS Code | Remote WSL, Dev Containers, Docker extensions |
@@ -51,7 +51,7 @@ Set-Location D:\code\devbox
 | PowerShell prompt | Starship (nerd-font-symbols preset) for PS5 and PS7 |
 | PowerShell UX | fzf + PSFzf (Ctrl+T / Ctrl+R), PSReadLine predictive IntelliSense (ListView) |
 | Package caches | npm + NuGet caches relocated onto the `D:` Dev Drive (per-user env vars) |
-| System | Long path support, OpenSSH Agent, Defender exclusion for WSL vhdx |
+| System | Long path support, OpenSSH Agent, Defender exclusion for every registered WSL distro's vhdx folder and Rancher Desktop's data |
 | Git | identity (auto-detected from the Entra user unless already set), autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote, delta as the diff pager |
 
 Keyboard shortcuts and how-tos for WezTerm, Starship and the CLI tools are in the
