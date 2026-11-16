@@ -227,9 +227,16 @@ update_starship() {
   echo "✓ starship updated to $(starship --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 }
 
+# Same as ensure_zoxide in setup-ubuntu.sh: the release asset for a tag resolved
+# through get_github_latest_tag, not zoxide's install.sh, whose anonymous GitHub
+# API call fails behind a shared IP.
 install_zoxide() {
-  curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh \
-    | sh -s -- --bin-dir "$HOME/.local/bin"
+  local version="$1" num="${1#v}" tmp
+  tmp=$(mktemp -d)
+  curl -fsSL "https://github.com/ajeetdsouza/zoxide/releases/download/${version}/zoxide-${num}-$(uname -m)-unknown-linux-musl.tar.gz" \
+    | tar -xz -C "$tmp" zoxide
+  install -Dm0755 "$tmp/zoxide" "$HOME/.local/bin/zoxide"
+  rm -rf "$tmp"
 }
 
 update_zoxide() {
@@ -246,7 +253,7 @@ update_zoxide() {
     return
   fi
   echo "→ Updating zoxide: $current → $num"
-  run_installer_quietly install_zoxide || return 1
+  install_zoxide "$latest"
   echo "✓ zoxide updated to $(zoxide --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 }
 

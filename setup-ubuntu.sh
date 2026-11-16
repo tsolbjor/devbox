@@ -867,8 +867,20 @@ ensure_zoxide() {
     echo "✓ zoxide already installed"
   else
     echo "→ Installing zoxide"
-    curl -fsSL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh \
-      | sh -s -- --bin-dir "$HOME/.local/bin"
+    # Not zoxide's install.sh: it asks the GitHub API for the latest release
+    # anonymously, which fails behind a shared IP (CI runners, a corporate NAT).
+    # gh_latest_tag authenticates when a token is to hand. The update-ubuntu.sh
+    # counterpart is install_zoxide there.
+    local version num tmp
+    version=$(gh_latest_tag ajeetdsouza/zoxide)   # e.g. v0.10.0
+    num="${version#v}"
+    tmp=$(mktemp -d)
+    # uname -m (x86_64 / aarch64) is zoxide's own asset naming.
+    curl -fsSL "https://github.com/ajeetdsouza/zoxide/releases/download/${version}/zoxide-${num}-$(uname -m)-unknown-linux-musl.tar.gz" \
+      | tar -xz -C "$tmp" zoxide
+    install -Dm0755 "$tmp/zoxide" "$HOME/.local/bin/zoxide"
+    rm -rf "$tmp"
+    echo "✓ zoxide ${version} installed"
   fi
 }
 
