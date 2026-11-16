@@ -128,10 +128,43 @@ function Ensure-Winget {
   }
 }
 
+# Run a native command, echoing its output live while keeping it for inspection.
+# stderr merges into the stream as text: under "Stop", Windows PowerShell 5.1
+# turns the first stderr line of a 2>&1 into a terminating error.
+function Invoke-NativeCaptured {
+  param([Parameter(Mandatory=$true)][scriptblock]$Command)
+  $ErrorActionPreference = "Continue"
+  $lines = New-Object System.Collections.Generic.List[string]
+  & $Command 2>&1 | ForEach-Object {
+    $line = "$_"
+    $lines.Add($line)
+    Write-Host $line
+  }
+  return ,$lines.ToArray()
+}
+
 function Update-WingetAll {
   Write-Host "→ Running winget upgrade --all" -ForegroundColor Cyan
-  winget upgrade --all --accept-package-agreements --accept-source-agreements
-  Write-Host "✓ winget upgrade complete" -ForegroundColor Green
+  $out = Invoke-NativeCaptured { winget upgrade --all --accept-package-agreements --accept-source-agreements }
+  $exit = $LASTEXITCODE
+  # winget will not upgrade a per-user install from an elevated session, and this
+  # script must run elevated. It says so after the package's "(n/m) Found <name>
+  # [<id>]" line; pair the two so the warning can name what to rerun.
+  $userScope = @()
+  $id = $null
+  foreach ($line in $out) {
+    if ($line -match '^\(\d+/\d+\) Found .* \[(?<id>[^\]]+)\]') { $id = $Matches.id }
+    elseif ($id -and $line -match 'installed for user scope cannot be') { $userScope += $id; $id = $null }
+  }
+  if ($userScope) {
+    Write-Host "⚠ winget skipped $($userScope.Count) per-user install(s), which it cannot upgrade elevated." -ForegroundColor Yellow
+    Write-Host "  From a terminal that is not elevated, run:" -ForegroundColor Yellow
+    foreach ($u in $userScope) { Write-Host "    winget upgrade --id $u -e" -ForegroundColor Yellow }
+  } elseif ($exit -ne 0 -and $exit -ne -1978335189) {   # 0x8A15002B: no applicable upgrade
+    throw ("winget upgrade --all failed (exit 0x{0:X8})" -f $exit)
+  } else {
+    Write-Host "✓ winget upgrade complete" -ForegroundColor Green
+  }
 }
 
 # Put fnm and its default Node on PATH for this session (see Ensure-Node in setup).
@@ -181,8 +214,32 @@ function Update-NpmGlobals {
     return
   }
   Write-Host "→ Updating global npm packages" -ForegroundColor Cyan
-  npm update -g
-  Write-Host "✓ global npm packages up to date" -ForegroundColor Green
+  $out = Invoke-NativeCaptured { npm update -g }
+  if ($LASTEXITCODE -ne 0) { throw "npm update -g failed (exit $LASTEXITCODE)" }
+  # npm runs no install script it has not been told to allow (allow-scripts), and
+  # only warns. A package whose postinstall fetches its binary (azure-functions-
+  # core-tools, esbuild) then keeps the old one or none. Allowing them is a trust
+  # decision about third-party code, so name them rather than allow them here.
+  $skipped = @($out | ForEach-Object {
+    if ($_ -match '^npm warn install-scripts\s+(?<pkg>(@[^/\s]+/)?[^@\s]+)@\S+ \(') { $Matches.pkg }
+  } | Select-Object -Unique)
+  if ($skipped) {
+    # The globals that pull them in — the packages a reinstall has to name.
+    $tops = @()
+    try {
+      $ErrorActionPreference = "Continue"
+      $tree = (npm ls -g --json @skipped 2>$null) | Out-String | ConvertFrom-Json
+      if ($tree.PSObject.Properties['dependencies']) { $tops = @($tree.dependencies.PSObject.Properties.Name) }
+    } catch { }
+    finally { $ErrorActionPreference = "Stop" }
+    if (-not $tops) { $tops = $skipped }
+    Write-Host "⚠ npm skipped the install scripts of: $($skipped -join ', ')" -ForegroundColor Yellow
+    Write-Host "  Globals that use them may be incomplete. To allow the scripts once and reinstall:" -ForegroundColor Yellow
+    Write-Host "    npm install -g --allow-scripts=$($skipped -join ',') $($tops -join ' ')" -ForegroundColor Yellow
+    Write-Host "  or allow them for every global install: npm config set allow-scripts=$($skipped -join ',') --location=user" -ForegroundColor Yellow
+  } else {
+    Write-Host "✓ global npm packages up to date" -ForegroundColor Green
+  }
 }
 
 $script:currentStep = 0

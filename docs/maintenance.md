@@ -25,6 +25,18 @@ bash update-ubuntu.sh
 Toggle individual steps in each script's `PARAMETERS` block (or via `--skip-*`
 flags / env vars on Ubuntu).
 
+Two things `update-windows.ps1` reports with `⚠` but does not do itself:
+
+- **Per-user winget installs** (Aspire CLI, devtunnel, …) cannot be upgraded from
+  an elevated session. The run lists them; upgrade each from a normal terminal
+  with the `winget upgrade --id <id> -e` it prints.
+- **npm install scripts.** npm runs no install script that `allow-scripts` does
+  not allow, so a global whose postinstall fetches a binary
+  (azure-functions-core-tools, esbuild) is left with the old one or none. The run
+  names the skipped packages and the globals that pull them in, and prints the
+  `npm install -g --allow-scripts=…` that reinstalls them. Allowing them is a
+  trust decision, so the script does not make it for you.
+
 ## Detecting drift
 
 Over time a machine accumulates apps and config the setup process doesn't know

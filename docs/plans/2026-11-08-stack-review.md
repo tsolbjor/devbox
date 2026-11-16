@@ -109,6 +109,9 @@ Those two choices cause most of the findings below.
   installer (setup-windows.ps1). Worst case (`setup-windows.ps1:1252-1254`):
   nvm-windows is uninstalled even when moving its global packages failed. Fix: one
   `Invoke-Native` helper that throws on a non-zero `$LASTEXITCODE`.
+  Done for `winget upgrade --all` and `npm update -g` (2026-11-16, `Invoke-NativeCaptured`
+  in update-windows.ps1, which also warns about the per-user packages winget skips
+  when elevated and the install scripts npm skips); the rest is still open.
 - [ ] **B9. Windows PowerShell 5.1 writes a BOM into generated files.**
   `Set-Content -Encoding UTF8` puts one into `.wslconfig` (`:589`) and Rancher Desktop's
   `settings.json` (`:1065`). Whether those programs reject it is unverified. Fix:
