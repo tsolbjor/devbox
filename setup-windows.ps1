@@ -167,12 +167,12 @@ $Config = @{
     localhostForwarding = $null   # Ignored by WSL when networkingMode=mirrored; set only for NAT mode
   }
 
-  # Rancher Desktop VM + Kubernetes settings.
-  # memoryInGB / numberCPUs: $null = match WSL allocation.
+  # Rancher Desktop engine + Kubernetes settings. No memory/CPU here: on Windows
+  # Rancher Desktop runs as WSL distros inside the one WSL VM, which WslConfig
+  # above sizes — its own virtualMachine.memoryInGB / numberCPUs apply only on
+  # macOS and Linux (rdctl on Windows does not even offer them).
   RancherDesktopConfig = @{
     Configure         = $true
-    memoryInGB        = $null   # $null = match WSL allocation
-    numberCPUs        = $null   # $null = match WSL allocation
     containerEngine   = "moby"  # "moby" for Docker-compatible CLI
     kubernetesEnabled = $true
   }
@@ -1127,27 +1127,42 @@ function Ensure-RancherDesktopConfig {
     return
   }
 
+  # A running Rancher Desktop rewrites settings.json from memory, so a file edit
+  # would be lost; set it through its own CLI instead, which applies the change
+  # live (restarting the backend if it has to).
   $rdRunning = Get-Process | Where-Object { $_.Name -like "*rancher*desktop*" }
   if ($rdRunning) {
-    Write-Warning "Rancher Desktop is currently running. Close it before rerunning so settings are not overwritten by the live process."
+    # rdctl reports progress on stderr, which 5.1 turns into a terminating error
+    # under "Stop"; failures are caught through $LASTEXITCODE below instead.
+    $ErrorActionPreference = "Continue"
+    $rdctl = (Get-Command rdctl -ErrorAction SilentlyContinue).Source
+    if (-not $rdctl) { $rdctl = Join-Path $env:ProgramFiles "Rancher Desktop\resources\resources\win32\bin\rdctl.exe" }
+    if (-not (Test-Path $rdctl)) {
+      Write-Warning "Rancher Desktop is running and rdctl was not found. Close Rancher Desktop and rerun to apply its settings."
+      return
+    }
+    $live = & $rdctl list-settings 2>$null | Out-String
+    if ($LASTEXITCODE -ne 0 -or -not $live.Trim()) {
+      Write-Warning "Rancher Desktop is still starting (rdctl list-settings failed). Rerun once it is up, or close it and rerun."
+      return
+    }
+    $live = $live | ConvertFrom-Json
+    $rdArgs = @()
+    if ($live.containerEngine.name -ne $RdConfig.containerEngine) { $rdArgs += "--container-engine.name=$($RdConfig.containerEngine)" }
+    if ($live.kubernetes.enabled -ne $RdConfig.kubernetesEnabled) { $rdArgs += "--kubernetes.enabled=$("$($RdConfig.kubernetesEnabled)".ToLower())" }
+    if (-not $rdArgs) {
+      Write-Host "✓ Rancher Desktop settings already match desired configuration." -ForegroundColor Green
+      return
+    }
+    Write-Host "→ Applying Rancher Desktop settings: rdctl set $($rdArgs -join ' ')" -ForegroundColor Cyan
+    & $rdctl set @rdArgs
+    if ($LASTEXITCODE -ne 0) { throw "rdctl set failed (exit $LASTEXITCODE)" }
+    Write-Host "✓ Rancher Desktop configured." -ForegroundColor Green
     return
   }
 
   $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
   $changed = $false
-
-  # Virtual machine resources
-  if ($null -eq $settings.virtualMachine) {
-    $settings | Add-Member -NotePropertyName "virtualMachine" -NotePropertyValue ([PSCustomObject]@{}) -Force
-  }
-  if ($settings.virtualMachine.memoryInGB -ne $RdConfig.memoryInGB) {
-    $settings.virtualMachine.memoryInGB = $RdConfig.memoryInGB
-    $changed = $true
-  }
-  if ($settings.virtualMachine.numberCPUs -ne $RdConfig.numberCPUs) {
-    $settings.virtualMachine.numberCPUs = $RdConfig.numberCPUs
-    $changed = $true
-  }
 
   # Container engine (moby = Docker-compatible)
   if ($null -eq $settings.containerEngine) {
@@ -1171,7 +1186,7 @@ function Ensure-RancherDesktopConfig {
     Write-Host "→ Writing Rancher Desktop settings: $settingsPath" -ForegroundColor Cyan
     # No BOM: Windows PowerShell 5.1's Set-Content -Encoding UTF8 writes one.
     [IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
-    Write-Host "✓ Rancher Desktop configured (restart Rancher Desktop to apply)." -ForegroundColor Green
+    Write-Host "✓ Rancher Desktop configured (applies when it next starts)." -ForegroundColor Green
   } else {
     Write-Host "✓ Rancher Desktop settings already match desired configuration." -ForegroundColor Green
   }
@@ -1660,8 +1675,6 @@ Write-Host "WSL allocation (75%): $($alloc.MemoryGB) GB RAM, $($alloc.CPUs) CPUs
 if (-not $Config.WslConfig.memory)     { $Config.WslConfig.memory     = "$($alloc.MemoryGB)GB" }
 if (-not $Config.WslConfig.processors) { $Config.WslConfig.processors = $alloc.CPUs }
 if ($null -eq $Config.WslConfig.swap -and $null -ne $alloc.Swap) { $Config.WslConfig.swap = $alloc.Swap }
-if (-not $Config.RancherDesktopConfig.memoryInGB) { $Config.RancherDesktopConfig.memoryInGB = $alloc.MemoryGB }
-if (-not $Config.RancherDesktopConfig.numberCPUs) { $Config.RancherDesktopConfig.numberCPUs = $alloc.CPUs }
 
 Show-Progress "Installing apps"
 if ($Config.InstallWezTerm)         { Install-WingetPackage -Id "wez.wezterm" }
@@ -1770,5 +1783,4 @@ if ($script:FailedInstalls.Count -gt 0) {
   exit 1
 }
 Write-Host "`nDone." -ForegroundColor Green
-Write-Host "Tip: Apply WSL resource changes with: wsl --shutdown" -ForegroundColor Cyan
-Write-Host "Tip: Restart Rancher Desktop to apply VM resource changes." -ForegroundColor Cyan
+Write-Host "Tip: Apply WSL resource changes (Rancher Desktop's too) with: wsl --shutdown" -ForegroundColor Cyan

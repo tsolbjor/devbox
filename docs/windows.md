@@ -46,7 +46,7 @@ Set-Location D:\code\devbox
 | Per-folder env | mise, activated in the PS5 and PS7 profiles: a client's `KUBECONFIG` and `AZURE_CONFIG_DIR` per folder (below) |
 | VS Code | Remote WSL, Dev Containers, Docker extensions |
 | WSL | Ubuntu distro, resource limits (75% RAM/CPU), mirrored networking, swap disabled when allocated RAM ≥ 16 GB |
-| Rancher Desktop | moby engine (Docker-compatible), Kubernetes enabled |
+| Rancher Desktop | moby engine (Docker-compatible), Kubernetes enabled. Its memory and CPUs are the WSL VM's, set in `.wslconfig` |
 | WezTerm | JetBrains Mono Nerd Font, One Half Dark scheme, bar cursor, bell off; opens Ubuntu by default; local panes run pwsh (not cmd); Ctrl+Shift+1/2 switch pwsh (D:\code) / Ubuntu; Ctrl+Shift+3 opens a dev-layout tab (Claude Code \| yazi / shell) in the current directory; Ctrl+Shift+Alt+arrows split in any direction, inheriting the pane's shell and directory |
 | PowerShell prompt | Starship (nerd-font-symbols preset) for PS5 and PS7 |
 | PowerShell UX | fzf + PSFzf (Ctrl+T / Ctrl+R), PSReadLine predictive IntelliSense (ListView) |

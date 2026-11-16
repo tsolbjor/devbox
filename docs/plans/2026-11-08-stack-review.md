@@ -138,8 +138,12 @@ Those two choices cause most of the findings below.
 
 - [ ] **W1.** `.wslconfig` is written whole, not merged, and has no `autoMemoryReclaim`
   or `sparseVhd` (`setup-windows.ps1:562-594`).
-- [ ] **W2.** The Rancher Desktop `virtualMachine.memoryInGB` / `numberCPUs` merge
+- [x] **W2.** The Rancher Desktop `virtualMachine.memoryInGB` / `numberCPUs` merge
   likely does nothing with the WSL backend (`:1033-1043`). Verify, and consider `rdctl set`.
+  Done 2026-11-16: confirmed — `rdctl set` on Windows offers no memory/CPU flags, and
+  Rancher Desktop's distros share the WSL VM that `.wslconfig` sizes. Setup no longer
+  writes them, and applies engine/Kubernetes with `rdctl set` while Rancher Desktop runs
+  instead of asking you to close it.
 - [ ] **W3.** `core.autocrlf=true` on Windows breaks shell scripts built into
   containers from `D:\code` (`:22`, `:1348`). Mostly fixed by B1 for repos with a
   `.gitattributes`; consider `input` as the Windows default.
