@@ -645,7 +645,13 @@ activate_fnm() {
   [[ -x "$FNM_DIR/fnm" ]] || return 1
   export FNM_DIR
   case ":$PATH:" in *":$FNM_DIR:"*) ;; *) export PATH="$FNM_DIR:$PATH" ;; esac
-  eval "$(fnm env --shell bash)"
+  # A set but missing XDG_RUNTIME_DIR (WSL without a systemd login session) makes
+  # fnm env fail; it falls back to ~/.local/state without one.
+  if [[ -n "${XDG_RUNTIME_DIR:-}" && ! -w "$XDG_RUNTIME_DIR" ]]; then
+    eval "$(env -u XDG_RUNTIME_DIR fnm env --shell bash)"
+  else
+    eval "$(fnm env --shell bash)"
+  fi
 }
 
 # The version fnm's `default` alias points at (e.g. v24.21.0), or nothing.
@@ -1170,10 +1176,17 @@ HEADER
 # Node (fnm). --use-on-cd switches Node on entering a directory that carries
 # .nvmrc / .node-version / package.json engines; elsewhere the fnm default applies.
 # npm globals live in one prefix shared by every version (~/.npmrc).
+# fnm keeps its per-shell link under \$XDG_RUNTIME_DIR when that is set, and fails
+# outright when WSL sets it but never created /run/user/<uid> (no systemd login
+# session). Node then never reaches PATH, nor anything started from this shell.
 if [ -x "$fnm_dir/fnm" ]; then
   export FNM_DIR="$fnm_dir"
   export PATH="\$FNM_DIR:\$PATH"
-  eval "\$(fnm env --use-on-cd --shell $shell)"
+  if [ -n "\${XDG_RUNTIME_DIR:-}" ] && [ ! -w "\$XDG_RUNTIME_DIR" ]; then
+    eval "\$(env -u XDG_RUNTIME_DIR fnm env --use-on-cd --shell $shell)"
+  else
+    eval "\$(fnm env --use-on-cd --shell $shell)"
+  fi
 fi
 FNM
   fi
