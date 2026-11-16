@@ -93,7 +93,8 @@ k9s
 
 Write `{{env.HOME}}`, not `~`: mise does not expand `~` in `[env]` values. az
 extensions stay shared, because setup sets `AZURE_EXTENSION_DIR` to one directory.
-`mise env` shows what applies in the current folder.
+Entering or leaving the folder prints the variables that changed (`mise
++AZURE_CONFIG_DIR +KUBECONFIG`, names only); `mise env` shows their values.
 
 Each folder's `kubectx` / `kubens` switches only rewrite that folder's file, so two
 terminals in two clients never move each other's current context. Outside any

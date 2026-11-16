@@ -1535,7 +1535,10 @@ STAR
 # it on leaving — how a client folder picks its own KUBECONFIG and AZURE_CONFIG_DIR
 # (docs/ubuntu.md). After starship: in zsh both append a precmd hook, so starship's
 # runs first and records \$? before mise's hook overwrites it. The prompt is drawn
-# after every hook, so it already shows the folder's environment.
+# after every hook, so it already shows the folder's environment. MISE_STATUS_SHOW_ENV
+# makes the hook name the variables it changes on cd ("mise +KUBECONFIG"): names only,
+# never values.
+export MISE_STATUS_SHOW_ENV=1
 if command -v mise >/dev/null 2>&1; then eval "\$(mise activate $shell)"; fi
 MISE
   fi

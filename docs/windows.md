@@ -85,7 +85,9 @@ a `mise.toml` and a login on each side.
 
 mise wraps the prompt function, so its profile block must stay below the Starship
 line. Setup warns and the audit reports drift if it doesn't. In Windows PowerShell
-5.1 the folder's env applies at the next prompt; pwsh 7 applies it on `cd`.
+5.1 the folder's env applies at the next prompt; pwsh 7 applies it on `cd`. Either
+way mise prints the variables that changed (`mise +AZURE_CONFIG_DIR +KUBECONFIG`,
+names only); `mise env` shows their values.
 
 ## Customisation
 

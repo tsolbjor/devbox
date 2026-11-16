@@ -1054,8 +1054,10 @@ function Ensure-Mise {
 # AZURE_CONFIG_DIR) applies inside its folder tree and is dropped on leaving it.
 # mise wraps the prompt function, so this stays below the Starship line.
 # Windows PowerShell 5.1 has no cd hook; there the [env] applies at the next prompt.
+# MISE_STATUS_SHOW_ENV names the variables a folder changes ("mise +KUBECONFIG").
 if (Get-Command mise -ErrorAction SilentlyContinue) {
   $env:MISE_PWSH_CHPWD_WARNING = '0'
+  $env:MISE_STATUS_SHOW_ENV = '1'
   (& mise activate pwsh) | Out-String | Invoke-Expression
 }
 # --- end devbox block ---
