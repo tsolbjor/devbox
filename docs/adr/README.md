@@ -31,3 +31,4 @@ Work that is planned but not yet decided or built belongs in [../plans/](../plan
 | [0011](0011-reconcile-version-pins-explicitly.md) | Version pins are reconciled explicitly; reruns never move them | Accepted | 2026-09-24 |
 | [0012](0012-powershell-utf8-bom.md) | PowerShell scripts are UTF-8 with a BOM; the bootstrap is pure ASCII | Accepted | 2026-09-26 |
 | [0013](0013-rancher-desktop-container-engine.md) | Rancher Desktop (moby) is the container engine | Accepted (rationale reconstructed) | 2026-02-28 |
+| [0014](0014-per-folder-env-with-mise.md) | Per-folder environment with mise on both platforms; direnv kept for repos' own .envrc | Accepted | 2026-11-11 |

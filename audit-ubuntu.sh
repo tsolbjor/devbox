@@ -278,6 +278,15 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
       fi
     fi
   fi
+
+  # azd signs in through az, so it follows the folder's AZURE_CONFIG_DIR like az does.
+  if grep -qE '^AZD_USE_AZ_CLI_AUTH="\$\{AZD_USE_AZ_CLI_AUTH:-true\}"' "$SETUP" && command -v azd >/dev/null 2>&1; then
+    azd_cli_auth=$(azd config get auth.useAzCliAuth 2>/dev/null | tr -d '"[:space:]' || true)
+    if [[ "$azd_cli_auth" != "true" ]]; then
+      report_drift "azd keeps a login of its own (auth.useAzCliAuth is '${azd_cli_auth:-unset}'), so it ignores the folder's AZURE_CONFIG_DIR." \
+        "fix: bash setup-ubuntu.sh" "keep: set AZD_USE_AZ_CLI_AUTH=false in setup-ubuntu.sh"
+    fi
+  fi
 fi
 
 # ---------- extras (snap / pipx / npm) ----------

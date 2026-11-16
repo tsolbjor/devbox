@@ -42,7 +42,8 @@ Set-Location D:\code\devbox
 | CLI tools | ripgrep, bat, fd, jq, yq, sops, git-delta, lazygit, glow, yazi, micro, GitHub CLI — the same basics `setup-ubuntu.sh` installs, so pwsh matches the WSL shell |
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (winget) |
 | Fonts | Cascadia Code, JetBrains Mono Nerd Font |
-| Cloud CLIs | Azure CLI, Azure Developer CLI (`azd`), kubelogin (Entra auth for AKS) — add AWS CLI / Google Cloud SDK via `CloudCLIs` |
+| Cloud CLIs | Azure CLI (extensions in one shared `AZURE_EXTENSION_DIR`), Azure Developer CLI (`azd`, signing in through az), kubelogin (Entra auth for AKS), k9s, kubectx, kubens, stern — add AWS CLI / Google Cloud SDK via `CloudCLIs`. kubectl and helm come with Rancher Desktop |
+| Per-folder env | mise, activated in the PS5 and PS7 profiles: a client's `KUBECONFIG` and `AZURE_CONFIG_DIR` per folder (below) |
 | VS Code | Remote WSL, Dev Containers, Docker extensions |
 | WSL | Ubuntu distro, resource limits (75% RAM/CPU), mirrored networking, swap disabled when allocated RAM ≥ 16 GB |
 | Rancher Desktop | moby engine (Docker-compatible), Kubernetes enabled |
@@ -55,6 +56,36 @@ Set-Location D:\code\devbox
 
 Keyboard shortcuts and how-tos for WezTerm, Starship and the CLI tools are in the
 [terminal cheatsheet](cheatsheet.md).
+
+## A kubeconfig and az login per folder
+
+This is the same convention as the WSL shell ([ubuntu.md](ubuntu.md#a-kubeconfig-and-az-login-per-folder)).
+A trusted `mise.toml` above a client's repos sets `KUBECONFIG` and
+`AZURE_CONFIG_DIR` while you are inside that folder:
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.kube\clients" | Out-Null
+@'
+[env]
+KUBECONFIG       = "{{env.USERPROFILE}}/.kube/clients/acme.yaml"
+AZURE_CONFIG_DIR = "{{env.USERPROFILE}}/.azure-clients/acme"
+'@ | Set-Content D:\code\acme\mise.toml
+mise trust D:\code\acme      # once, and again whenever the file changes
+
+Set-Location D:\code\acme\some-repo
+az login --tenant <tenant>
+az aks get-credentials -g <rg> -n <cluster> --file $env:KUBECONFIG
+kubelogin convert-kubeconfig -l azurecli
+k9s
+```
+
+Write `{{env.USERPROFILE}}`: Windows has no `HOME` variable, and mise does not
+expand `~`. Windows and WSL keep separate files, so a client you use from both has
+a `mise.toml` and a login on each side.
+
+mise wraps the prompt function, so its profile block must stay below the Starship
+line. Setup warns and the audit reports drift if it doesn't. In Windows PowerShell
+5.1 the folder's env applies at the next prompt; pwsh 7 applies it on `cd`.
 
 ## Customisation
 

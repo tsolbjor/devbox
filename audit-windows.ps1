@@ -549,6 +549,7 @@ if ($Config.CheckConfigFiles) {
       @{ Enabled = $setup.ConfigurePwshExtras; Marker = "PSReadLine predictions"; Label = "PSReadLine/PSFzf"; Func = "Ensure-PowerShellExperience" }
       @{ Enabled = $setup.ShowCwdInTabTitle;   Marker = "tab title";              Label = "tab-title";        Func = "Ensure-ShellTabTitle" }
       @{ Enabled = $setup.InstallNode;         Marker = "fnm";                    Label = "fnm";              Func = "Ensure-Node" }
+      @{ Enabled = $setup.InstallMise;         Marker = "mise";                   Label = "mise";             Func = "Ensure-Mise" }
     )
     foreach ($b in $blocks) {
       if (-not $b.Enabled) { continue }
@@ -561,6 +562,16 @@ if ($Config.CheckConfigFiles) {
       if ($expected -and $Matches[0].Trim() -ne $expected) {
         Report-Drift "$($p.Name) profile has an outdated $($b.Label) block." @(
           "fix: .\setup-windows.ps1 (rewrites the block in place)"
+        )
+      }
+    }
+    # mise wraps the prompt function that exists when its block runs. A Starship
+    # line after the block replaces that wrapper, and the per-folder env stops applying.
+    if ($setup.InstallMise) {
+      $miseAt = $content.IndexOf("# --- devbox: mise")
+      if ($miseAt -ge 0 -and $content.LastIndexOf("starship init") -gt $miseAt) {
+        Report-Drift "$($p.Name) profile runs Starship after the mise block, so mise's per-folder env never applies." @(
+          "fix: move the Starship line above '# --- devbox: mise' in $($p.Path)"
         )
       }
     }
@@ -611,6 +622,25 @@ if ($Config.CheckConfigFiles) {
       if ($cur -ne $setup.Editor) {
         Report-Drift "env $name = '$cur' (expected '$($setup.Editor)')." @("fix: .\setup-windows.ps1")
       }
+    }
+  }
+
+  # Per-folder AZURE_CONFIG_DIR support: one shared az extension dir, and azd
+  # signing in through az so it follows the folder's config dir too.
+  if ($setup.AzureCli.SharedExtensionDir -and (@($setup.CloudCLIs) -contains "Microsoft.AzureCLI")) {
+    $want = Join-Path $env:USERPROFILE ".azure\cliextensions"
+    $cur = [Environment]::GetEnvironmentVariable("AZURE_EXTENSION_DIR", "User")
+    if ($cur -ne $want) {
+      Report-Drift "env AZURE_EXTENSION_DIR = '$cur' (expected '$want') — every AZURE_CONFIG_DIR needs its own az extensions." @("fix: .\setup-windows.ps1")
+    }
+  }
+  if ($setup.AzureCli.AzdUseAzCliAuth -and (@($setup.CloudCLIs) -contains "Microsoft.Azd") -and (Test-Command "azd")) {
+    $azdAuth = (& azd config get auth.useAzCliAuth 2>$null | Out-String).Trim().Trim('"')
+    if ($azdAuth -ne "true") {
+      Report-Drift "azd keeps a login of its own (auth.useAzCliAuth = '$azdAuth'), so it ignores the folder's AZURE_CONFIG_DIR." @(
+        "fix:  .\setup-windows.ps1",
+        "keep: set `$Config.AzureCli.AzdUseAzCliAuth = `$false in setup-windows.ps1"
+      )
     }
   }
 

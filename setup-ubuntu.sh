@@ -43,7 +43,7 @@ APT_PACKAGES=(
   zsh
   file      # yazi's mime-type detection
   micro     # terminal editor with familiar keys (Ctrl+S, Ctrl+Q)
-  direnv    # per-directory env from .envrc — e.g. a client's KUBECONFIG, see docs/ubuntu.md
+  direnv    # loads a repo's own .envrc; devbox's per-folder convention is mise (INSTALL_MISE)
 )
 
 # Optional installs
@@ -57,6 +57,10 @@ INSTALL_K9S="${INSTALL_K9S:-true}"
 INSTALL_KUBECTX="${INSTALL_KUBECTX:-true}"
 INSTALL_KUBELOGIN="${INSTALL_KUBELOGIN:-true}"    # Entra ID credential plugin — required by kubectl against AKS
 INSTALL_OPENTOFU="${INSTALL_OPENTOFU:-true}"      # `tofu` — Terraform-compatible IaC, from OpenTofu's apt repo
+INSTALL_AZURE_CLI="${INSTALL_AZURE_CLI:-true}"    # `az`, from Microsoft's apt repo. Extensions go to one shared
+                                                  # AZURE_EXTENSION_DIR, so a per-folder AZURE_CONFIG_DIR keeps them
+INSTALL_MISE="${INSTALL_MISE:-true}"              # per-folder environment: a trusted mise.toml's [env] — e.g. a
+                                                  # client's KUBECONFIG and AZURE_CONFIG_DIR, see docs/ubuntu.md
 INSTALL_STARSHIP="${INSTALL_STARSHIP:-true}"
 STARSHIP_PRESET="${STARSHIP_PRESET:-nerd-font-symbols}"   # `starship preset --list`; empty keeps the built-in default
 
@@ -132,6 +136,8 @@ MIGRATE_APT_DOTNET="${MIGRATE_APT_DOTNET:-ask}"   # ask | yes | no — purge apt
                                                   # are reinstalled in DOTNET_INSTALL_DIR (see migrate_apt_dotnet)
 INSTALL_ASPIRE="${INSTALL_ASPIRE:-true}"          # `aspire` CLI from aspire.dev (needs a .NET SDK to run an AppHost)
 INSTALL_AZD="${INSTALL_AZD:-true}"                # `azd` — Azure Developer CLI; provisions and deploys an Aspire AppHost
+AZD_USE_AZ_CLI_AUTH="${AZD_USE_AZ_CLI_AUTH:-true}"  # azd signs in through az (auth.useAzCliAuth), so it follows the
+                                                    # folder's AZURE_CONFIG_DIR instead of keeping a login of its own
 INSTALL_DOTNET_TOOLS="${INSTALL_DOTNET_TOOLS:-true}"  # .NET global tools, listed in ensure_dotnet_tools: dotnet-outdated
                                                       # (the NuGet counterpart to ncu), dotnet-ef, linux-dev-certs
 INSTALL_PYTHON="${INSTALL_PYTHON:-true}"          # python3 venv/pip + pipx + uv
@@ -559,6 +565,62 @@ ensure_opentofu() {
   ensure_pkg tofu
   if command -v snap >/dev/null 2>&1 && snap list opentofu >/dev/null 2>&1; then
     echo "⚠ the opentofu snap is installed too; the apt package now provides tofu — remove it: sudo snap remove opentofu"
+  fi
+}
+
+# True when an apt source under sources.list.d already points at the URL. Matched on
+# the URL rather than a file name: the same repo added under another name (by the
+# vendor's own install script, say) with another keyring path makes apt refuse
+# every update with "Conflicting values set for option Signed-By".
+apt_repo_present() {
+  grep -rqsF "$1" /etc/apt/sources.list.d/
+}
+
+# az from Microsoft's apt repo, laid out the way Microsoft's own install script
+# (aka.ms/InstallAzureCLIDeb) does it, so a machine set up either way ends up with
+# the same files. update-ubuntu.sh's apt upgrade keeps it current. An az from
+# somewhere else (pip, a venv) is left alone rather than shadowed by a second one.
+ensure_azure_cli() {
+  if ensure_command az && ! is_pkg_installed azure-cli; then
+    echo "✓ az already installed, not from apt ($(command -v az)) — left as it is"
+    return
+  fi
+  if ! is_pkg_installed azure-cli && ! apt_repo_present "packages.microsoft.com/repos/azure-cli"; then
+    echo "→ Adding Microsoft's azure-cli apt repo"
+    sudo install -m 0755 -d /etc/apt/keyrings
+    if [[ ! -f /etc/apt/keyrings/microsoft.gpg ]]; then
+      curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+        | sudo gpg --no-tty --batch --dearmor -o /etc/apt/keyrings/microsoft.gpg
+    fi
+    sudo chmod go+r /etc/apt/keyrings/microsoft.gpg
+    printf 'Types: deb\nURIs: https://packages.microsoft.com/repos/azure-cli/\nSuites: %s\nComponents: main\nArchitectures: %s\nSigned-by: /etc/apt/keyrings/microsoft.gpg\n' \
+      "$(lsb_release -cs)" "$(dpkg --print-architecture)" \
+      | sudo tee /etc/apt/sources.list.d/azure-cli.sources > /dev/null
+    sudo apt-get update -y
+  fi
+  ensure_pkg azure-cli
+}
+
+# mise, used here for its per-folder environment only: a trusted mise.toml's [env]
+# applies inside its directory tree and is dropped on leaving it, which is how a
+# client folder picks its own KUBECONFIG and AZURE_CONFIG_DIR. The pwsh side uses
+# the same tool and file format (ADR 0014). From mise's apt repo, so
+# update-ubuntu.sh's apt upgrade keeps it current. Its shell hook lives in
+# ~/.config/devbox/<shell>rc. direnv stays alongside it for repos that ship their
+# own .envrc. A mise installed some other way (mise.run into ~/.local/bin) is left alone.
+ensure_mise() {
+  if ensure_command mise && ! is_pkg_installed mise; then
+    echo "✓ mise already installed, not from apt ($(command -v mise)) — left as it is"
+  else
+    if ! is_pkg_installed mise && ! apt_repo_present "mise.jdx.dev/deb"; then
+      echo "→ Adding mise apt repo"
+      sudo install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://mise.jdx.dev/gpg-key.pub | sudo tee /etc/apt/keyrings/mise-archive-keyring.asc > /dev/null
+      echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.asc] https://mise.jdx.dev/deb stable main" \
+        | sudo tee /etc/apt/sources.list.d/mise.list > /dev/null
+      sudo apt-get update -y
+    fi
+    ensure_pkg mise
   fi
 }
 
@@ -1128,6 +1190,16 @@ fi
 DOTNET
   fi
 
+  if [[ "$INSTALL_AZURE_CLI" == "true" ]]; then
+    cat <<'AZURE'
+
+# az keeps its extensions inside AZURE_CONFIG_DIR unless told otherwise, so every
+# per-folder config dir (mise.toml [env]) would need its own copies. One shared
+# directory instead — az's default location, so existing extensions stay put.
+export AZURE_EXTENSION_DIR="${AZURE_EXTENSION_DIR:-$HOME/.azure/cliextensions}"
+AZURE
+  fi
+
   if [[ "$shell" == "zsh" ]]; then
     render_devbox_zsh_body
   else
@@ -1412,9 +1484,9 @@ fi
 EDITOR
 }
 
-# zoxide, then starship, then direnv: zoxide hooks in after compinit (which oh-my-zsh
-# ran above), starship's prompt must be the one left standing, and direnv's hook
-# must run before starship's on every prompt.
+# zoxide, then starship, then mise and direnv: zoxide hooks in after compinit (which
+# oh-my-zsh ran above), starship's prompt must be the one left standing, and
+# starship's per-prompt hook must run before mise's.
 render_devbox_prompt_tools() {
   local shell="$1"
   if [[ "$INSTALL_ZOXIDE" == "true" ]]; then
@@ -1431,12 +1503,23 @@ ZOX
 if command -v starship >/dev/null 2>&1; then eval "\$(starship init $shell)"; fi
 STAR
   fi
+  if [[ "$INSTALL_MISE" == "true" ]]; then
+    cat <<MISE
+
+# mise applies a trusted mise.toml's [env] on entering its directory tree and drops
+# it on leaving — how a client folder picks its own KUBECONFIG and AZURE_CONFIG_DIR
+# (docs/ubuntu.md). After starship: in zsh both append a precmd hook, so starship's
+# runs first and records \$? before mise's hook overwrites it. The prompt is drawn
+# after every hook, so it already shows the folder's environment.
+if command -v mise >/dev/null 2>&1; then eval "\$(mise activate $shell)"; fi
+MISE
+  fi
   cat <<DIRENV
 
 # direnv loads an allowed .envrc on entering its directory tree and unloads it on
-# leaving — how a client folder picks its own KUBECONFIG for kubectl, k9s, helm.
-# After starship: the hook puts itself first in the prompt hooks, so the prompt
-# already sees the new environment (and it hands \$? through untouched).
+# leaving — for repos that ship their own .envrc (devbox's own convention is the
+# mise.toml above). The hook puts itself first in the prompt hooks and hands \$?
+# through untouched, so the prompt already sees the new environment.
 if command -v direnv >/dev/null 2>&1; then eval "\$(direnv hook $shell)"; fi
 DIRENV
 }
@@ -1744,6 +1827,19 @@ ensure_azd() {
   echo "✓ azd installed ($(azd version 2>/dev/null | head -1))"
 }
 
+# azd keeps a login of its own unless told to use az's. Pointed at az, it follows
+# whatever AZURE_CONFIG_DIR the folder's mise.toml selects, the way az and
+# kubelogin's azurecli mode already do. `azd config get` prints the value JSON-quoted.
+ensure_azd_cli_auth() {
+  ensure_command azd || return 0
+  if [[ "$(azd config get auth.useAzCliAuth 2>/dev/null | tr -d '"[:space:]')" == "true" ]]; then
+    echo "✓ azd signs in through az (auth.useAzCliAuth)"
+  else
+    echo "→ Pointing azd at az's login: azd config set auth.useAzCliAuth true"
+    azd config set auth.useAzCliAuth true >/dev/null
+  fi
+}
+
 # Symlink a ~/.dotnet/tools binary into ~/.local/bin (idempotent).
 ensure_dotnet_tool_shim() {
   local name="$1" src="$HOME/.dotnet/tools/$1"
@@ -1898,6 +1994,8 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, code dir, shell config
 [[ "$INSTALL_KUBECTX"    == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_KUBELOGIN"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_OPENTOFU"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_AZURE_CLI"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_MISE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_STARSHIP"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ZOXIDE"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_BAT"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -2036,6 +2134,16 @@ if [[ "$INSTALL_OPENTOFU" == "true" ]]; then
   ensure_opentofu
 fi
 
+if [[ "$INSTALL_AZURE_CLI" == "true" ]]; then
+  log "Installing Azure CLI"
+  ensure_azure_cli
+fi
+
+if [[ "$INSTALL_MISE" == "true" ]]; then
+  log "Installing mise (per-folder environment)"
+  ensure_mise
+fi
+
 if [[ "$INSTALL_STARSHIP" == "true" ]]; then
   log "Installing starship"
   ensure_starship
@@ -2129,6 +2237,7 @@ fi
 if [[ "$INSTALL_AZD" == "true" ]]; then
   log "Installing Azure Developer CLI"
   ensure_azd
+  if [[ "$AZD_USE_AZ_CLI_AUTH" == "true" ]]; then ensure_azd_cli_auth; fi
 fi
 
 if [[ "$INSTALL_DOTNET_TOOLS" == "true" ]]; then

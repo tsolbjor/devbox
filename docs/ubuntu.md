@@ -50,7 +50,9 @@ After the script finishes it prints your SSH public key and next steps.
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (npm global) |
 | Languages | .NET SDK (10 LTS, newest feature band, in `~/.dotnet` — Ubuntu's apt feed stops at 1xx), Aspire CLI, `dotnet outdated` (NuGet's `ncu`), Python (venv/pip/pipx/uv) |
 | Azure | Azure Developer CLI (`azd`) — provisions and deploys an Aspire AppHost |
-| Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern, kubelogin (Entra auth for AKS); a kubeconfig per folder via direnv (below) |
+| Kubernetes | kubectl, helm, k9s, kubectx, kubens, stern, kubelogin (Entra auth for AKS); a kubeconfig per folder via mise (below) |
+| Per-folder env | mise (`mise.toml` `[env]`, the devbox convention, same as pwsh); direnv for repos that ship their own `.envrc` |
+| Azure | Azure CLI (Microsoft's apt repo, extensions in one shared `AZURE_EXTENSION_DIR`), `azd` signing in through az; an az login per folder via mise (below) |
 | Containers | verifies docker answers — on WSL, that Rancher Desktop's docker is wired in |
 | Git | user config (on WSL auto-detected from Windows), defaults, SSH commit signing, on WSL HTTPS auth via the Windows Git Credential Manager |
 | SSH | ed25519 key pair |
@@ -59,29 +61,51 @@ After the script finishes it prints your SSH public key and next steps.
 Keyboard shortcuts and how-tos for the shell tools are in the
 [terminal cheatsheet](cheatsheet.md).
 
-## A kubeconfig per folder
+## A kubeconfig and az login per folder
 
-direnv (hooked into the generated shell config) exports `KUBECONFIG` from an
-`.envrc` when you `cd` into its tree and drops it when you leave, so kubectl, k9s,
-helm, stern and kubectx all see the cluster of the folder you are in. Put the
-`.envrc` in the folder *above* a client's repos — one file covers all of them, and
-no credentials path lands in a repo:
+mise (hooked into the generated shell config) applies the `[env]` of a trusted
+`mise.toml` when you `cd` into its tree and drops it when you leave. Two variables
+pick a client's cluster and Azure tenant:
+
+- `KUBECONFIG` — kubectl, k9s, helm, stern and kubectx all use the folder's cluster
+- `AZURE_CONFIG_DIR` — az uses the folder's own login, tenant and default
+  subscription. So do kubelogin's `azurecli` mode, `AzureCliCredential` in apps you
+  start from that shell, and azd, which setup points at az's login.
+
+Put the `mise.toml` in the folder *above* a client's repos. One file covers all of
+them, and no credentials path lands in a repo:
 
 ```bash
 mkdir -p ~/.kube/clients && chmod 700 ~/.kube ~/.kube/clients
-echo 'export KUBECONFIG="$HOME/.kube/clients/acme.yaml"' > ~/code/acme/.envrc
-direnv allow ~/code/acme     # once, and again whenever the .envrc changes
+cat > ~/code/acme/mise.toml <<'EOF'
+[env]
+KUBECONFIG       = "{{env.HOME}}/.kube/clients/acme.yaml"
+AZURE_CONFIG_DIR = "{{env.HOME}}/.azure-clients/acme"
+EOF
+mise trust ~/code/acme       # once, and again whenever the file changes
 
 cd ~/code/acme/some-repo
+az login --tenant <tenant>                                         # lands in the folder's AZURE_CONFIG_DIR
 az aks get-credentials -g <rg> -n <cluster> --file "$KUBECONFIG"   # az ignores KUBECONFIG without --file
 kubelogin convert-kubeconfig -l azurecli                           # Entra clusters
 k9s
 ```
 
+Write `{{env.HOME}}`, not `~`: mise does not expand `~` in `[env]` values. az
+extensions stay shared, because setup sets `AZURE_EXTENSION_DIR` to one directory.
+`mise env` shows what applies in the current folder.
+
 Each folder's `kubectx` / `kubens` switches only rewrite that folder's file, so two
 terminals in two clients never move each other's current context. Outside any
-`.envrc` tree, `~/.kube/config` applies as usual. To see the context in the prompt,
-set `[kubernetes] disabled = false` in `~/.config/starship.toml`.
+`mise.toml` tree, `~/.kube/config` and `~/.azure` apply as usual. To see the
+context in the prompt, set `[kubernetes] disabled = false` in
+`~/.config/starship.toml`. The pwsh side works the same way
+([windows.md](windows.md#a-kubeconfig-and-az-login-per-folder)).
+
+direnv stays installed and hooked for repos that ship their own `.envrc` (`direnv
+allow` it as before). For a folder of your own, prefer `mise.toml`: it works the
+same in pwsh. A plain `.envrc` of yours with only `export` lines moves over as-is,
+each line becoming an `[env]` key.
 
 ## Customisation
 

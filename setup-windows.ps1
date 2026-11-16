@@ -57,6 +57,13 @@ $Config = @{
   # profile name. Rides on Starship's pre-command hook, so it needs Starship above.
   ShowCwdInTabTitle = $true
 
+  # Per-folder environment via mise: a trusted mise.toml's [env] above a client's
+  # repos sets that client's KUBECONFIG and AZURE_CONFIG_DIR on entering the folder
+  # and drops them on leaving it. Same tool and file format as the WSL shell
+  # (ADR 0014). Its profile block wraps Starship's prompt, so it is written after
+  # the Starship line. See docs/windows.md.
+  InstallMise = $true
+
   # Modern CLI tools — the Windows half of what setup-ubuntu.sh installs, so a
   # pwsh shell on the host has the same basics as the WSL one. Listed here rather
   # than as individual Install* switches because they are all plain binaries that
@@ -88,15 +95,30 @@ $Config = @{
     "NERD-Fonts.JetBrainsMono"
   )
 
-  # Cloud CLIs (remove any you don't need; add Amazon.AWSCLI / Google.CloudSDK if multi-cloud).
-  # Azd provisions and deploys an Aspire AppHost; kubelogin is the Entra ID
-  # credential plugin kubectl shells out to — an Entra-integrated AKS cluster
-  # writes `exec: kubelogin` into the kubeconfig, so kubectl alone cannot log in.
+  # Cloud and Kubernetes CLIs (remove any you don't need; add Amazon.AWSCLI /
+  # Google.CloudSDK if multi-cloud). Azd provisions and deploys an Aspire AppHost;
+  # kubelogin is the Entra ID credential plugin kubectl shells out to — an
+  # Entra-integrated AKS cluster writes `exec: kubelogin` into the kubeconfig, so
+  # kubectl alone cannot log in. kubectl and helm come with Rancher Desktop; the
+  # rest match the Kubernetes tools setup-ubuntu.sh installs.
   CloudCLIs = @(
     "Microsoft.AzureCLI",
     "Microsoft.Azd",
-    "Microsoft.Azure.Kubelogin"
+    "Microsoft.Azure.Kubelogin",
+    "Derailed.k9s",              # k9s — cluster TUI
+    "ahmetb.kubectx",            # kubectx — switch context
+    "ahmetb.kubens",             # kubens — switch namespace
+    "stern.stern"                # stern — multi-pod log tailing
   )
+
+  # Azure CLI settings that make a per-folder AZURE_CONFIG_DIR (mise.toml [env])
+  # practical. Applied only when Microsoft.AzureCLI / Microsoft.Azd are installed above.
+  AzureCli = @{
+    SharedExtensionDir = $true   # AZURE_EXTENSION_DIR = %USERPROFILE%\.azure\cliextensions (az's default
+                                 # location): az otherwise keeps extensions inside each config dir
+    AzdUseAzCliAuth    = $true   # azd signs in through az (auth.useAzCliAuth), so it follows the
+                                 # folder's AZURE_CONFIG_DIR instead of keeping a login of its own
+  }
 
   # WezTerm appearance — written to a managed ~/.wezterm.lua (overwritten on rerun)
   WezTermConfig = @{
@@ -992,6 +1014,66 @@ function Invoke-Starship-PreCommand {
   }
 }
 
+# mise, for its per-folder environment: a trusted mise.toml's [env] applies inside
+# its directory tree and is dropped on leaving it. mise's pwsh activation wraps
+# whatever `prompt` function exists when it runs, so this block has to come after
+# the Starship line, which defines that function. A Starship line placed after it
+# replaces the wrapper and the [env] quietly stops applying; that is warned about here
+# and reported by the audit. The bash/zsh counterpart is the mise section of
+# ~/.config/devbox/<shell>rc (setup-ubuntu.sh).
+function Ensure-Mise {
+  Install-WingetPackage -Id "jdx.mise"
+  $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+              [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+  $snippet = @'
+
+# --- devbox: mise (managed block) ---
+# Per-folder environment: a trusted mise.toml's [env] (a client's KUBECONFIG,
+# AZURE_CONFIG_DIR) applies inside its folder tree and is dropped on leaving it.
+# mise wraps the prompt function, so this stays below the Starship line.
+# Windows PowerShell 5.1 has no cd hook; there the [env] applies at the next prompt.
+if (Get-Command mise -ErrorAction SilentlyContinue) {
+  $env:MISE_PWSH_CHPWD_WARNING = '0'
+  (& mise activate pwsh) | Out-String | Invoke-Expression
+}
+# --- end devbox block ---
+'@
+  foreach ($t in Get-PowerShellProfileTargets) {
+    Set-ManagedProfileBlock -Path $t.Profile -Marker "mise" -Snippet $snippet -Label "mise"
+    $content = Get-Content $t.Profile -Raw
+    $starship = $content.LastIndexOf("starship init")
+    if ($starship -gt $content.IndexOf("# --- devbox: mise")) {
+      Write-Host "⚠ The Starship line in $($t.Profile) comes after the mise block, so mise's per-folder env never applies. Move the Starship line above the block." -ForegroundColor Yellow
+    }
+  }
+}
+
+# Settings that make a per-folder AZURE_CONFIG_DIR practical: one extension
+# directory shared by every config dir, and azd signing in through az.
+function Ensure-AzureCliSettings {
+  param([Parameter(Mandatory=$true)]$Spec, [string[]]$CloudCLIs)
+  if ($Spec.SharedExtensionDir -and ($CloudCLIs -contains "Microsoft.AzureCLI")) {
+    Set-UserEnvVar -Name "AZURE_EXTENSION_DIR" -Value (Join-Path $env:USERPROFILE ".azure\cliextensions")
+  }
+  if ($Spec.AzdUseAzCliAuth -and ($CloudCLIs -contains "Microsoft.Azd")) {
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+                [System.Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not (Test-Command "azd")) {
+      Write-Warning "azd not on PATH yet — open a new terminal and rerun setup to point it at az's login."
+      return
+    }
+    # `azd config get` prints the value JSON-quoted, and fails when the key is unset.
+    $current = (& azd config get auth.useAzCliAuth 2>$null | Out-String).Trim().Trim('"')
+    if ($current -eq "true") {
+      Write-Host "✓ azd signs in through az (auth.useAzCliAuth)" -ForegroundColor Green
+    } else {
+      Write-Host "→ Pointing azd at az's login: azd config set auth.useAzCliAuth true" -ForegroundColor Cyan
+      & azd config set auth.useAzCliAuth true | Out-Null
+    }
+  }
+}
+
 function Ensure-VSCodeExtensions {
   param([string[]]$Extensions)
 
@@ -1531,6 +1613,7 @@ if ($Config.WezTermConfig.Configure) { $totalSteps++ }
 if ($Config.Starship.Configure)   { $totalSteps++ }
 if ($Config.ConfigurePwshExtras)  { $totalSteps++ }
 if ($Config.ShowCwdInTabTitle)    { $totalSteps++ }
+if ($Config.InstallMise)          { $totalSteps++ }
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) { $totalSteps++ }
 if ($Config.RancherDesktopConfig.Configure) { $totalSteps++ }
 $script:totalSteps = $totalSteps
@@ -1594,6 +1677,7 @@ if ($Config.Fonts.Count -gt 0) {
 if ($Config.CloudCLIs.Count -gt 0) {
   Show-Progress "Installing cloud CLIs"
   foreach ($cli in $Config.CloudCLIs) { Install-WingetPackage -Id $cli }
+  Ensure-AzureCliSettings -Spec $Config.AzureCli -CloudCLIs $Config.CloudCLIs
 }
 
 Show-Progress "Configuring WSL"
@@ -1623,6 +1707,12 @@ if ($Config.ConfigurePwshExtras) {
 if ($Config.ShowCwdInTabTitle) {
   Show-Progress "Configuring tab titles (current directory)"
   Ensure-ShellTabTitle
+}
+
+# After Starship: mise wraps the prompt function Starship's line defines.
+if ($Config.InstallMise) {
+  Show-Progress "Configuring mise (per-folder environment)"
+  Ensure-Mise
 }
 
 if ($Config.InstallVSCode -and $Config.VSCodeExtensions.Count -gt 0) {

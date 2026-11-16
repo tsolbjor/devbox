@@ -182,19 +182,20 @@ Those two choices cause most of the findings below.
 ## 3. Tool selection
 
 **Keep:** git, gh, delta, lazygit, ripgrep, fd, fzf, bat, jq, yq, zoxide, starship,
-direnv, kubectl, helm, k9s, kubectx, kubelogin, stern, sops, OpenTofu, azd, uv, Claude
+direnv, mise, kubectl, helm, k9s, kubectx, kubelogin, stern, sops, OpenTofu, azd, uv, Claude
 Code, WezTerm, pwsh 7, VS Code, PowerToys, `dotnet-install.sh`.
 
 **Add:**
-- [ ] **Azure CLI (`az`) on Ubuntu.** It's only installed on Windows today, but on WSL
+- [x] **Azure CLI (`az`) on Ubuntu.** It's only installed on Windows today, but on WSL
   you need it for `az aks get-credentials`, for kubelogin's `azurecli` mode, and for
   Bicep. docs/ubuntu.md already tells users to run `az aks get-credentials`.
 - [ ] **`age`**, if sops is meant for age keys and not only Key Vault.
 
 **Replace:**
-- [ ] **fnm and the ~12 GitHub-release installers → mise** (A1). Also consider letting
-  mise's per-folder environment variables replace direnv for KUBECONFIG; keeping direnv
-  is fine.
+- [ ] **fnm and the ~12 GitHub-release installers → mise** (A1). mise's per-folder
+  environment variables are now the convention on both platforms
+  ([ADR 0014](../adr/0014-per-folder-env-with-mise.md); direnv stays for repos'
+  own `.envrc`), so mise is installed and hooked in. Moving tools onto it is still open.
 - [ ] **pipx → uv.** `uv tool install` does the same job, and uv is already installed,
   currently through pipx.
 - [ ] **Rancher Desktop Kubernetes: off by default.** k3s holds memory all day. Turn it
