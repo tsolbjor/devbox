@@ -21,8 +21,15 @@ irm https://raw.githubusercontent.com/tsolbjor/devbox/main/bootstrap-windows.ps1
 
 `bootstrap-windows.ps1` verifies winget, installs Git, creates a **Dev Drive** at
 `D:` (a VHDX-backed ReFS volume — needs no free partition, re-attached at boot),
-and clones this repo to `D:\code\devbox`. It installs no apps and doesn't touch
-WSL — it just prepares the ground, then prints the next command.
+enables Windows `sudo`, and clones this repo to `D:\code\devbox`. It installs no
+apps and doesn't touch WSL — it just prepares the ground, then prints the next
+command.
+
+From an elevated **cmd** prompt instead:
+
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/tsolbjor/devbox/main/bootstrap-windows.ps1 | iex"
+```
 
 Then run the full setup from the cloned folder:
 
@@ -30,6 +37,28 @@ Then run the full setup from the cloned folder:
 Set-Location D:\code\devbox
 .\setup-windows.ps1
 ```
+
+## Running elevated with sudo
+
+Windows 11 24H2 and later include their own `sudo`. Bootstrap and setup switch it
+on in its default *new window* mode (`SudoMode` in `$Config`; a mode you already
+picked is kept). After that, you don't need a "Run as administrator" window to run
+setup or update again. From any normal terminal:
+
+```powershell
+sudo powershell -NoProfile -ExecutionPolicy Bypass -File D:\code\devbox\update-windows.ps1
+sudo powershell -NoProfile -ExecutionPolicy Bypass -File D:\code\devbox\setup-windows.ps1
+```
+
+`-ExecutionPolicy Bypass` goes on the command because the elevated PowerShell is a
+new process: a `Set-ExecutionPolicy -Scope Process` in your own window doesn't
+reach it. In new-window mode the scripts wait for Enter before the window closes.
+For output in the same terminal, switch to inline mode once with
+`sudo config --enable normal` (from an elevated prompt).
+
+On a blank PC, sudo is still off until bootstrap has run, so the first step needs
+the elevated window. An organisation policy can also block sudo. Bootstrap and
+setup then print a ⚠ and carry on.
 
 > Already have Git and a `D:` drive? Skip the bootstrap — clone the repo and run
 > `.\setup-windows.ps1` directly.
@@ -51,7 +80,7 @@ Set-Location D:\code\devbox
 | PowerShell prompt | Starship (nerd-font-symbols preset) for PS5 and PS7 |
 | PowerShell UX | fzf + PSFzf (Ctrl+T / Ctrl+R), PSReadLine predictive IntelliSense (ListView) |
 | Package caches | npm + NuGet caches relocated onto the `D:` Dev Drive (per-user env vars) |
-| System | Long path support, OpenSSH Agent, Defender exclusion for every registered WSL distro's vhdx folder and Rancher Desktop's data |
+| System | Long path support, OpenSSH Agent, Windows `sudo` (enabled when off), Defender exclusion for every registered WSL distro's vhdx folder and Rancher Desktop's data |
 | Git | identity (auto-detected from the Entra user unless already set), autocrlf, defaultBranch, pull.rebase, push.autoSetupRemote, delta as the diff pager |
 
 Keyboard shortcuts and how-tos for WezTerm, Starship and the CLI tools are in the

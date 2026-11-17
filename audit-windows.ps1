@@ -738,6 +738,20 @@ if ($Config.CheckStartup) {
     Report-Warn "ssh-agent service not found (enable OpenSSH Client in Optional Features)."
   }
 
+  # Windows sudo — setup enables it when off (any mode counts; setup keeps the user's).
+  if ($setup.ContainsKey("SudoMode") -and $setup.SudoMode -and (Test-Path (Join-Path $env:SystemRoot "System32\sudo.exe"))) {
+    $sudoModes = @{ 1 = "forceNewWindow"; 2 = "disableInput"; 3 = "normal" }
+    $sudoState = [int](Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo" -Name "Enabled" -ErrorAction SilentlyContinue).Enabled
+    if ($sudoState -gt 0) {
+      Report-Ok "sudo enabled ($($sudoModes[$sudoState]))."
+    } else {
+      Report-Drift "Windows sudo is disabled." @(
+        "fix:  sudo config --enable $($setup.SudoMode)   (from an elevated prompt), or rerun .\setup-windows.ps1",
+        "keep: set `$Config.SudoMode = `$null in setup-windows.ps1"
+      )
+    }
+  }
+
   # --- autostart inventory (informational — not counted as drift) ---
   Write-Host "  autostart inventory (informational — review, adopt into setup, or remove):" -ForegroundColor DarkGray
 

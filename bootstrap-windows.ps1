@@ -8,6 +8,7 @@
 #   2. Git                          - winget-installed if missing
 #   3. A Dev Drive at D:            - created as a VHDX (ReFS, trusted) if absent
 #   4. This repo cloned to D:\code  - so setup-windows.ps1 is on disk to run
+#   5. Windows sudo enabled         - so later runs need no "Run as administrator" window
 #
 # It intentionally does NOT install apps or touch WSL - that's setup-windows.ps1's job.
 # Run this once on a fresh machine, then run .\setup-windows.ps1 from the cloned folder.
@@ -30,6 +31,10 @@ $Config = @{
     Url       = "https://github.com/tsolbjor/devbox.git"
     CloneRoot = "D:\code"                   # parent dir; repo lands in <CloneRoot>\<repo name>
   }
+
+  # Windows sudo (11 24H2+), enabled if off: forceNewWindow | disableInput | normal (inline).
+  # An already-enabled mode is kept. $null = leave alone. Mirrors SudoMode in setup-windows.ps1.
+  SudoMode = "forceNewWindow"
 }
 
 # =========================
@@ -49,6 +54,7 @@ $ErrorActionPreference = "Stop"
 # from disk and carry a BOM.)
 $OK = [string][char]0x2713   # check mark: already done
 $GO = [string][char]0x2192   # arrow: taking action
+$WARN = [string][char]0x26A0 # warning sign
 
 function Assert-Admin {
   $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -87,6 +93,33 @@ function Ensure-Git {
   Update-SessionPath
   if (-not (Test-Command "git")) {
     throw "Git was installed but is still not on PATH. Open a new terminal and rerun this script."
+  }
+}
+
+# Windows' own sudo, so setup/update can later run elevated from a normal terminal.
+# Only switched on when off: a mode the user picked stays. Called by its full path,
+# since a scoop/gsudo `sudo` earlier on PATH takes other arguments. Not fatal: an
+# older build lacks it and an organisation policy can block it.
+function Ensure-Sudo {
+  param([Parameter(Mandatory=$true)][string]$Mode)
+  $sudoExe = Join-Path $env:SystemRoot "System32\sudo.exe"
+  if (-not (Test-Path $sudoExe)) {
+    Write-Host "$WARN Windows sudo not available on this build (needs Windows 11 24H2) - skipping" -ForegroundColor Yellow
+    return
+  }
+  $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo"
+  $current = [int](Get-ItemProperty -Path $key -Name "Enabled" -ErrorAction SilentlyContinue).Enabled
+  if ($current -gt 0) {
+    Write-Host "$OK sudo already enabled" -ForegroundColor Green
+    return
+  }
+  Write-Host "$GO Enabling sudo ($Mode)" -ForegroundColor Cyan
+  & $sudoExe config --enable $Mode | Out-Null
+  $current = [int](Get-ItemProperty -Path $key -Name "Enabled" -ErrorAction SilentlyContinue).Enabled
+  if ($current -gt 0) {
+    Write-Host "$OK sudo enabled" -ForegroundColor Green
+  } else {
+    Write-Host "$WARN sudo could not be enabled (an organisation policy may block it)" -ForegroundColor Yellow
   }
 }
 
@@ -207,6 +240,7 @@ function Ensure-Repo {
 Assert-Admin
 Ensure-Winget
 Ensure-Git
+if ($Config.SudoMode) { Ensure-Sudo -Mode $Config.SudoMode }
 Ensure-DevDrive -Spec $Config.DevDrive
 $repoPath = Ensure-Repo -Spec $Config.Repo
 

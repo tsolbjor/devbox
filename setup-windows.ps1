@@ -181,6 +181,8 @@ $Config = @{
   EnableLongPaths        = $true   # removes 260-char path limit
   EnableOpenSSHAgent     = $true   # allows SSH key forwarding across the WSL boundary
   ExcludeWslFromDefender = $true   # excludes WSL vhdx from real-time scanning
+  SudoMode               = "forceNewWindow"  # enable Windows sudo (24H2+) if off: forceNewWindow | disableInput |
+                                             # normal (inline). An already-enabled mode is kept. $null = leave alone
 
   # VS Code extensions installed on Windows (not inside containers)
   VSCodeExtensions = @(
@@ -1592,6 +1594,34 @@ function Enable-OpenSSHAgent {
   Write-Host "✓ OpenSSH Authentication Agent enabled." -ForegroundColor Green
 }
 
+# Windows' own sudo (11 24H2+), so a normal terminal can run the devbox scripts
+# elevated. Only switched on when off: a mode the user picked stays. Called by its
+# full path — a scoop/gsudo `sudo` earlier on PATH takes other arguments.
+function Ensure-Sudo {
+  param([Parameter(Mandatory=$true)][string]$Mode)
+  $sudoExe = Join-Path $env:SystemRoot "System32\sudo.exe"
+  if (-not (Test-Path $sudoExe)) {
+    Write-Host "⚠ Windows sudo not available on this build (needs Windows 11 24H2) — skipping." -ForegroundColor Yellow
+    return
+  }
+  $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo"
+  $modes = @{ 1 = "forceNewWindow"; 2 = "disableInput"; 3 = "normal" }
+  $current = [int](Get-ItemProperty -Path $key -Name "Enabled" -ErrorAction SilentlyContinue).Enabled
+  if ($current -gt 0) {
+    Write-Host "✓ sudo already enabled ($($modes[$current]))." -ForegroundColor Green
+    return
+  }
+  Write-Host "→ Enabling sudo ($Mode)." -ForegroundColor Cyan
+  & $sudoExe config --enable $Mode | Out-Null
+  $current = [int](Get-ItemProperty -Path $key -Name "Enabled" -ErrorAction SilentlyContinue).Enabled
+  if ($current -gt 0) {
+    Write-Host "✓ sudo enabled ($($modes[$current]))." -ForegroundColor Green
+  } else {
+    # Not fatal: sudo is a convenience, and an organisation policy can switch it off.
+    Write-Host "⚠ sudo could not be enabled (an organisation policy may block it)." -ForegroundColor Yellow
+  }
+}
+
 $script:currentStep = 0
 $script:totalSteps  = 0
 
@@ -1776,6 +1806,7 @@ Show-Progress "Applying system settings"
 if ($Config.EnableLongPaths)        { Enable-LongPaths }
 if ($Config.EnableOpenSSHAgent)     { Enable-OpenSSHAgent }
 if ($Config.ExcludeWslFromDefender) { Add-WslDefenderExclusion }
+if ($Config.SudoMode)               { Ensure-Sudo -Mode $Config.SudoMode }
 if ($Config.DevDrivePackageCaches.Configure) { Ensure-DevDrivePackageCaches -Spec $Config.DevDrivePackageCaches }
 
 if ($script:FailedInstalls.Count -gt 0) {

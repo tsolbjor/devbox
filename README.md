@@ -17,13 +17,23 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 irm https://raw.githubusercontent.com/tsolbjor/devbox/main/bootstrap-windows.ps1 | iex
 ```
 
-This installs Git, creates a Dev Drive at `D:` and clones this repo to
-`D:\code\devbox`. Then run the full setup:
+Or from an elevated **cmd** prompt:
+
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/tsolbjor/devbox/main/bootstrap-windows.ps1 | iex"
+```
+
+This installs Git, creates a Dev Drive at `D:`, enables Windows `sudo` and clones
+this repo to `D:\code\devbox`. Then run the full setup:
 
 ```powershell
 Set-Location D:\code\devbox
 .\setup-windows.ps1
 ```
+
+Later runs need no admin window. From any terminal:
+`sudo powershell -NoProfile -ExecutionPolicy Bypass -File D:\code\devbox\update-windows.ps1`
+([details](docs/windows.md#running-elevated-with-sudo)).
 
 Details, what gets installed and how to customise it: [docs/windows.md](docs/windows.md).
 
