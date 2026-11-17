@@ -142,7 +142,7 @@ function Get-ExpectedNpmGlobals {
   $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($p in $Paths) {
     if (-not (Test-Path $p)) { continue }
-    foreach ($m in [regex]::Matches((Get-Content $p -Raw), 'npm\s+install\s+-g\s+([\w@][\w@\/.-]*)')) {
+    foreach ($m in [regex]::Matches((Get-Content $p -Raw), 'npm\s+install\s+-g\s+((?:@[\w.-]+/)?\w[\w@\/.-]*)')) {
       [void]$names.Add($m.Groups[1].Value)
     }
   }
