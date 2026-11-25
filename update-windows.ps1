@@ -157,13 +157,77 @@ function Update-WingetAll {
     elseif ($id -and $line -match 'installed for user scope cannot be') { $userScope += $id; $id = $null }
   }
   if ($userScope) {
-    Write-Host "⚠ winget skipped $($userScope.Count) per-user install(s), which it cannot upgrade elevated." -ForegroundColor Yellow
-    Write-Host "  From a terminal that is not elevated, run:" -ForegroundColor Yellow
-    foreach ($u in $userScope) { Write-Host "    winget upgrade --id $u -e" -ForegroundColor Yellow }
-  } elseif ($exit -ne 0 -and $exit -ne -1978335189) {   # 0x8A15002B: no applicable upgrade
+    # Upgrade them where they are installed, as the same user without elevation,
+    # rather than moving them to machine scope: a second, machine-wide copy would
+    # leave the per-user one on PATH behind it, still stale.
+    $left = @()
+    foreach ($u in $userScope) {
+      Write-Host "→ Upgrading per-user install $u without elevation" -ForegroundColor Cyan
+      $code = Invoke-Unelevated "winget upgrade --id $u -e --silent --disable-interactivity --accept-package-agreements --accept-source-agreements"
+      if ($code -eq 0 -or $code -eq $script:WingetNoUpgrade) {
+        Write-Host "✓ $u up to date" -ForegroundColor Green
+      } else {
+        if ($null -ne $code) { Write-Host ("⚠ {0}: winget exit 0x{1:X8}" -f $u, $code) -ForegroundColor Yellow }
+        $left += $u
+      }
+    }
+    if ($left) {
+      Write-Host "⚠ $($left.Count) per-user install(s) could not be upgraded without elevation." -ForegroundColor Yellow
+      Write-Host "  From a terminal that is not elevated, run:" -ForegroundColor Yellow
+      foreach ($u in $left) { Write-Host "    winget upgrade --id $u -e" -ForegroundColor Yellow }
+    } else {
+      Write-Host "✓ winget upgrade complete" -ForegroundColor Green
+    }
+  } elseif ($exit -ne 0 -and $exit -ne $script:WingetNoUpgrade) {
     throw ("winget upgrade --all failed (exit 0x{0:X8})" -f $exit)
   } else {
     Write-Host "✓ winget upgrade complete" -ForegroundColor Green
+  }
+}
+
+$script:WingetNoUpgrade = -1978335189   # 0x8A15002B: no applicable upgrade
+
+# Run a command line as the current user *without* elevation: a one-off scheduled
+# task with a Limited run level on that user's interactive session. winget refuses
+# to touch a per-user install from an elevated session, and this script must run
+# elevated. Output goes through a log file and is echoed afterwards. Returns the
+# exit code, or $null when the task never started — e.g. the elevated account is
+# not the one signed in (over-the-shoulder admin), so there is no session to use.
+function Invoke-Unelevated {
+  param([Parameter(Mandatory=$true)][string]$CommandLine)
+  $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+  $name = "DevboxUnelevated-" + [guid]::NewGuid().ToString("N")
+  $log = Join-Path $env:TEMP "$name.log"
+  $notYetRun = 267011   # 0x41303 SCHED_S_TASK_HAS_NOT_RUN
+  $running = 267009     # 0x41301 SCHED_S_TASK_RUNNING
+  try {
+    $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/d /c $CommandLine > `"$log`" 2>&1"
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+      -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+    Register-ScheduledTask -TaskName $name -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+    Start-ScheduledTask -TaskName $name
+    $started = Get-Date
+    do {
+      Start-Sleep -Milliseconds 500
+      $result = (Get-ScheduledTaskInfo -TaskName $name).LastTaskResult
+      if ($result -eq $notYetRun -and ((Get-Date) - $started).TotalSeconds -gt 30) { break }
+    } while ($result -eq $notYetRun -or $result -eq $running)
+    if (Test-Path $log) {
+      Get-Content $log -Encoding UTF8 | Where-Object { $_.Trim() } | ForEach-Object { Write-Host "  $_" }
+    }
+    if ($result -eq $notYetRun) {
+      Write-Host "⚠ Could not start a task as $user (not signed in at this console?)" -ForegroundColor Yellow
+      return $null
+    }
+    # LastTaskResult is a UInt32; winget's codes are negative Int32s (0x8A15....)
+    return [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$result), 0)
+  } catch {
+    Write-Host "⚠ Could not run unelevated: $($_.Exception.Message)" -ForegroundColor Yellow
+    return $null
+  } finally {
+    Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-Item $log -Force -ErrorAction SilentlyContinue
   }
 }
 

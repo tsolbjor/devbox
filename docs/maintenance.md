@@ -25,11 +25,14 @@ bash update-ubuntu.sh
 Toggle individual steps in each script's `PARAMETERS` block (or via `--skip-*`
 flags / env vars on Ubuntu).
 
-Two things `update-windows.ps1` reports with `⚠` but does not do itself:
+**Per-user winget installs** (Aspire CLI, devtunnel, …) cannot be upgraded from
+an elevated session, so `update-windows.ps1` upgrades each one again as you,
+without elevation, through a one-off scheduled task it removes afterwards. If
+that cannot run (the elevated account is not the one signed in), it prints the
+`winget upgrade --id <id> -e` to run from a normal terminal.
 
-- **Per-user winget installs** (Aspire CLI, devtunnel, …) cannot be upgraded from
-  an elevated session. The run lists them; upgrade each from a normal terminal
-  with the `winget upgrade --id <id> -e` it prints.
+One thing `update-windows.ps1` reports with `⚠` but does not do itself:
+
 - **npm install scripts.** npm runs no install script that `allow-scripts` does
   not allow, so a global whose postinstall fetches a binary
   (azure-functions-core-tools, esbuild) is left with the old one or none. The run
