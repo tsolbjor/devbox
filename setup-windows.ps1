@@ -295,6 +295,14 @@ function Install-WingetPackage {
 
   Write-Host "→ Installing: $Id" -ForegroundColor Cyan
   winget install --id $Id -e --silent --accept-package-agreements --accept-source-agreements
+  # A portable (zip) package defaults to user scope, which winget refuses from an
+  # elevated session — and this script always runs elevated. Machine scope puts it
+  # under Program Files\WinGet with its link on the machine PATH, which the
+  # elevated `winget upgrade --all` in update-windows.ps1 can then keep current.
+  if ($LASTEXITCODE -eq $script:WingetUserScopeFromAdmin) {
+    Write-Host "→ Retrying $Id machine-wide (user-scope install is refused when elevated)" -ForegroundColor Cyan
+    winget install --id $Id -e --scope machine --silent --accept-package-agreements --accept-source-agreements
+  }
   # $ErrorActionPreference = "Stop" does not reach a native command's exit code,
   # so a failed install would otherwise scroll past unnoticed. Recorded and
   # summarised at the end rather than thrown: one bad package should not stop
@@ -314,6 +322,9 @@ $script:WingetOkExitCodes = @(
   -1978335135    # 0x8A150061  package already installed
 )
 $script:FailedInstalls = @()
+# 0x8A15007D: "not permitted from an administrator context on packages installed
+# within the user scope" — seen with AgileBits.1Password.CLI, a portable package
+$script:WingetUserScopeFromAdmin = -1978335107
 
 function Get-InstalledFontFamilies {
   $fontFamilies = [System.Collections.Generic.List[string]]::new()
