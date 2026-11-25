@@ -65,6 +65,8 @@ INSTALL_1PASSWORD_CLI="${INSTALL_1PASSWORD_CLI:-true}"  # `op`, from 1Password's
                                                   # Windows desktop app; use op.exe for that (docs/ubuntu.md)
 INSTALL_1PASSWORD_APP="${INSTALL_1PASSWORD_APP:-auto}"  # 1Password desktop app, same repo — auto: on native only;
                                                   # on WSL the Windows app is the one to use (setup-windows.ps1)
+OP_USE_WINDOWS_EXE="${OP_USE_WINDOWS_EXE:-true}"   # on WSL, `op` → the Windows op.exe when it is on PATH, so it
+                                                  # unlocks through the Windows 1Password app (Windows Hello)
 INSTALL_STARSHIP="${INSTALL_STARSHIP:-true}"
 STARSHIP_PRESET="${STARSHIP_PRESET:-nerd-font-symbols}"   # `starship preset --list`; empty keeps the built-in default
 
@@ -1426,6 +1428,7 @@ ZATUIN
   render_devbox_eza
   render_devbox_yazi
   render_devbox_editor
+  render_devbox_op
 
   cat <<'ZCWD'
 
@@ -1477,6 +1480,7 @@ BHIST
   render_devbox_eza
   render_devbox_yazi
   render_devbox_editor
+  render_devbox_op
 
   cat <<'BCWD'
 
@@ -1565,6 +1569,22 @@ if command -v $DEFAULT_EDITOR >/dev/null 2>&1; then
   export EDITOR="\${EDITOR:-$DEFAULT_EDITOR}" VISUAL="\${VISUAL:-$DEFAULT_EDITOR}"
 fi
 EDITOR
+}
+
+# The Linux `op` cannot reach the 1Password app on the Windows side, so on WSL
+# `op` runs the Windows op.exe (setup-windows.ps1 installs it machine-wide, on the
+# Windows PATH WSL appends). Checked at shell start, so native Ubuntu, or a WSL
+# without op.exe, keeps the apt `op`. WSL_DISTRO_NAME first: a PATH lookup that
+# misses walks every /mnt/c directory, which is slow.
+render_devbox_op() {
+  [[ "$OP_USE_WINDOWS_EXE" == "true" ]] || return 0
+  cat <<'OPEXE'
+
+# op → the Windows 1Password CLI on WSL, so it unlocks through the Windows app.
+if [ -n "${WSL_DISTRO_NAME:-}" ] && command -v op.exe >/dev/null 2>&1; then
+  alias op=op.exe
+fi
+OPEXE
 }
 
 # zoxide, then starship, then mise and direnv: zoxide hooks in after compinit (which

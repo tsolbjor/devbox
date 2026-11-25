@@ -112,14 +112,19 @@ each line becoming an `[env]` key.
 ## 1Password CLI on WSL
 
 `op` is installed from 1Password's apt repo, but on WSL that Linux binary cannot
-reach the 1Password desktop app on Windows, so app unlock (Touch/Windows Hello
-instead of a password) does not work with it. It still works with `op signin`
-or a service account token (`OP_SERVICE_ACCOUNT_TOKEN`). For app unlock, call the
-Windows binary `setup-windows.ps1` installs instead — `op.exe`, or
-`alias op=op.exe` in your own `~/.zshrc` — after enabling *Settings → Developer →
-Integrate with 1Password CLI* in the Windows app. On native Ubuntu, setup also installs
-the 1Password desktop app, and the same setting there lets the apt `op` unlock
-through it.
+reach the 1Password desktop app on Windows, so it cannot unlock through the app
+(Windows Hello). The generated shell config therefore aliases `op` to the Windows
+`op.exe` that `setup-windows.ps1` installs, whenever it runs on WSL and finds
+`op.exe` on the PATH. Turn on *Settings → Developer → Integrate with 1Password
+CLI* in the Windows app once. `command op` (or `\op`) still reaches the Linux
+binary, which works with `op signin` or a service account token
+(`OP_SERVICE_ACCOUNT_TOKEN`). `OP_USE_WINDOWS_EXE=false` drops the alias.
+
+The alias only applies at the prompt. A script that calls `op` gets the Linux
+binary, so call `op.exe` there when it needs the app.
+
+On native Ubuntu, setup also installs the 1Password desktop app, and the same
+setting there lets the apt `op` unlock through it.
 
 ## Customisation
 
