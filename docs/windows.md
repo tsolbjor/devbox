@@ -67,8 +67,8 @@ setup then print a ⚠ and carry on.
 
 | Category | What gets set up |
 |---|---|
-| Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 7-Zip, Node.js via fnm (host), Azure Functions Core Tools, Aspire CLI |
-| CLI tools | ripgrep, bat, fd, jq, yq, sops, git-delta, lazygit, glow, yazi, micro, GitHub CLI — the same basics `setup-ubuntu.sh` installs, so pwsh matches the WSL shell |
+| Apps | WezTerm, PowerShell 7, VS Code, Git, Rancher Desktop, PowerToys, 1Password, 7-Zip, Node.js via fnm (host), Azure Functions Core Tools, Aspire CLI |
+| CLI tools | ripgrep, bat, fd, jq, yq, sops, git-delta, lazygit, glow, yazi, micro, GitHub CLI, 1Password CLI (`op`) — the same basics `setup-ubuntu.sh` installs, so pwsh matches the WSL shell |
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (winget) |
 | Fonts | JetBrains Mono Nerd Font (from its release zip; Cascadia Code ships with Windows) |
 | Cloud CLIs | Azure CLI (extensions in one shared `AZURE_EXTENSION_DIR`), Azure Developer CLI (`azd`, signing in through az), kubelogin (Entra auth for AKS), k9s, kubectx, kubens, stern — add AWS CLI / Google Cloud SDK via `CloudCLIs`. kubectl and helm come with Rancher Desktop |

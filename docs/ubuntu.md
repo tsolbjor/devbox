@@ -46,7 +46,8 @@ After the script finishes it prints your SSH public key and next steps.
 |---|---|
 | Shell | zsh (set as default), Starship, fzf, zoxide, zsh-autosuggestions + zsh-syntax-highlighting — all configured in a generated `~/.config/devbox/<shell>rc`; your `~/.zshrc`/`~/.bashrc` only gets one loader block, and stays yours |
 | Shell UX | 200 000-line history for bash and zsh (flushed per command), inline suggestions in a readable colour, PSReadLine-style accept keys (`→`, `Ctrl+→`, `Tab`), `Ctrl+R` history picker |
-| Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, yq, sops, wget, zip, git-delta, lazygit, glow, yazi, micro, GitHub CLI, Node.js via fnm |
+| Dev tools | git, build-essential, ripgrep, fd, bat, eza, jq, yq, sops, wget, zip, git-delta, lazygit, glow, yazi, micro, GitHub CLI, 1Password CLI (`op`, see below), Node.js via fnm |
+| Desktop apps | 1Password (native Ubuntu only — on WSL the Windows app is the one to use; `INSTALL_1PASSWORD_APP=true` forces it) |
 | Agentic CLIs | Claude Code (native install, self-updating), Codex (npm global) |
 | Languages | .NET SDK (10 LTS, newest feature band, in `~/.dotnet` — Ubuntu's apt feed stops at 1xx), Aspire CLI, `dotnet outdated` (NuGet's `ncu`), Python (venv/pip/pipx/uv) |
 | Azure | Azure Developer CLI (`azd`) — provisions and deploys an Aspire AppHost |
@@ -107,6 +108,18 @@ direnv stays installed and hooked for repos that ship their own `.envrc` (`diren
 allow` it as before). For a folder of your own, prefer `mise.toml`: it works the
 same in pwsh. A plain `.envrc` of yours with only `export` lines moves over as-is,
 each line becoming an `[env]` key.
+
+## 1Password CLI on WSL
+
+`op` is installed from 1Password's apt repo, but on WSL that Linux binary cannot
+reach the 1Password desktop app on Windows, so app unlock (Touch/Windows Hello
+instead of a password) does not work with it. It still works with `op signin`
+or a service account token (`OP_SERVICE_ACCOUNT_TOKEN`). For app unlock, call the
+Windows binary `setup-windows.ps1` installs instead — `op.exe`, or
+`alias op=op.exe` in your own `~/.zshrc` — after enabling *Settings → Developer →
+Integrate with 1Password CLI* in the Windows app. On native Ubuntu, setup also installs
+the 1Password desktop app, and the same setting there lets the apt `op` unlock
+through it.
 
 ## Customisation
 

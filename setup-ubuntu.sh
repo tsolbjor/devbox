@@ -61,6 +61,10 @@ INSTALL_AZURE_CLI="${INSTALL_AZURE_CLI:-true}"    # `az`, from Microsoft's apt r
                                                   # AZURE_EXTENSION_DIR, so a per-folder AZURE_CONFIG_DIR keeps them
 INSTALL_MISE="${INSTALL_MISE:-true}"              # per-folder environment: a trusted mise.toml's [env] — e.g. a
                                                   # client's KUBECONFIG and AZURE_CONFIG_DIR, see docs/ubuntu.md
+INSTALL_1PASSWORD_CLI="${INSTALL_1PASSWORD_CLI:-true}"  # `op`, from 1Password's apt repo. On WSL it cannot reach the
+                                                  # Windows desktop app; use op.exe for that (docs/ubuntu.md)
+INSTALL_1PASSWORD_APP="${INSTALL_1PASSWORD_APP:-auto}"  # 1Password desktop app, same repo — auto: on native only;
+                                                  # on WSL the Windows app is the one to use (setup-windows.ps1)
 INSTALL_STARSHIP="${INSTALL_STARSHIP:-true}"
 STARSHIP_PRESET="${STARSHIP_PRESET:-nerd-font-symbols}"   # `starship preset --list`; empty keeps the built-in default
 
@@ -219,6 +223,7 @@ detect_devbox_env() {
   esac
   resolve_auto CONFIGURE_WSL_CONF
   resolve_auto USE_WINDOWS_GCM
+  resolve_auto_native INSTALL_1PASSWORD_APP
 }
 
 on_wsl() { [[ "$DEVBOX_ENV" == "wsl" ]]; }
@@ -228,6 +233,13 @@ resolve_auto() {
   local -n setting="$1"
   [[ "$setting" == "auto" ]] || return 0
   if on_wsl; then setting=true; else setting=false; fi
+}
+
+# The reverse, for the desktop apps WSL gets from Windows: `auto` → true on native.
+resolve_auto_native() {
+  local -n setting="$1"
+  [[ "$setting" == "auto" ]] || return 0
+  if on_wsl; then setting=false; else setting=true; fi
 }
 
 # An identity already in the global Git config wins over detection, as on Windows
@@ -622,6 +634,52 @@ ensure_mise() {
     fi
     ensure_pkg mise
   fi
+}
+
+# 1Password's own apt repo, laid out as their install docs do it: keyring, source,
+# and the debsig policy that verifies their .debs. Serves both the CLI and the
+# desktop app, and update-ubuntu.sh's apt upgrade keeps both current.
+ensure_1password_apt_repo() {
+  apt_repo_present "downloads.1password.com/linux/debian" && return 0
+  echo "→ Adding 1Password apt repo"
+  local arch key_id=AC2D62742012EA22
+  arch="$(dpkg --print-architecture)"
+  if [[ ! -f /usr/share/keyrings/1password-archive-keyring.gpg ]]; then
+    curl -fsSL https://downloads.1password.com/linux/keys/1password.asc \
+      | sudo gpg --no-tty --batch --dearmor -o /usr/share/keyrings/1password-archive-keyring.gpg
+  fi
+  sudo mkdir -p "/etc/debsig/policies/${key_id}" "/usr/share/debsig/keyrings/${key_id}"
+  curl -fsSL https://downloads.1password.com/linux/debian/debsig/1password.pol \
+    | sudo tee "/etc/debsig/policies/${key_id}/1password.pol" > /dev/null
+  if [[ ! -f "/usr/share/debsig/keyrings/${key_id}/debsig.gpg" ]]; then
+    curl -fsSL https://downloads.1password.com/linux/keys/1password.asc \
+      | sudo gpg --no-tty --batch --dearmor -o "/usr/share/debsig/keyrings/${key_id}/debsig.gpg"
+  fi
+  echo "deb [arch=${arch} signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/${arch} stable main" \
+    | sudo tee /etc/apt/sources.list.d/1password.list > /dev/null
+  sudo apt-get update -y
+}
+
+# The 1Password CLI (`op`). On WSL this Linux `op` cannot talk to the 1Password
+# desktop app on Windows; it still works with `op signin` or a service account
+# token, and op.exe covers the app integration (docs/ubuntu.md).
+ensure_1password_cli() {
+  if ensure_command op && ! is_pkg_installed 1password-cli; then
+    echo "✓ op already installed, not from apt ($(command -v op)) — left as it is"
+    return
+  fi
+  is_pkg_installed 1password-cli || ensure_1password_apt_repo
+  ensure_pkg 1password-cli
+}
+
+# The 1Password desktop app — native Ubuntu only by default (INSTALL_1PASSWORD_APP=auto):
+# on WSL the Windows app is the real one, and a second copy under WSLg would be a
+# separate, separately-unlocked app that op.exe and the SSH agent never see.
+# With it running, Settings → Developer → "Integrate with 1Password CLI" lets `op`
+# unlock through it.
+ensure_1password_app() {
+  is_pkg_installed 1password || ensure_1password_apt_repo
+  ensure_pkg 1password
 }
 
 # Node comes from fnm, not apt. Client repos pin their own Node (.nvmrc,
@@ -2024,6 +2082,8 @@ TOTAL_STEPS=7  # apt update, base packages, zsh, fd shim, code dir, shell config
 [[ "$INSTALL_OPENTOFU"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_AZURE_CLI"  == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_MISE"       == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_1PASSWORD_CLI" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
+[[ "$INSTALL_1PASSWORD_APP" == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_STARSHIP"   == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_ZOXIDE"      == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
 [[ "$INSTALL_BAT"         == "true" ]] && TOTAL_STEPS=$(( TOTAL_STEPS + 1 ))
@@ -2172,6 +2232,16 @@ fi
 if [[ "$INSTALL_MISE" == "true" ]]; then
   log "Installing mise (per-folder environment)"
   ensure_mise
+fi
+
+if [[ "$INSTALL_1PASSWORD_CLI" == "true" ]]; then
+  log "Installing 1Password CLI"
+  ensure_1password_cli
+fi
+
+if [[ "$INSTALL_1PASSWORD_APP" == "true" ]]; then
+  log "Installing 1Password desktop app"
+  ensure_1password_app
 fi
 
 if [[ "$INSTALL_STARSHIP" == "true" ]]; then

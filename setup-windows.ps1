@@ -10,6 +10,7 @@ $Config = @{
   InstallRancherDesktop  = $true
   InstallGit             = $true
   InstallPowerToys       = $true
+  Install1Password       = $true   # 1Password desktop app — also unlocks `op` (CliTools) and, via op.exe, WSL
 
   # Git for Windows global config (applied after Git is installed)
   GitConfig = @{
@@ -81,6 +82,7 @@ $Config = @{
     "jqlang.jq",                 # jq
     "MikeFarah.yq",              # yq — jq for YAML/TOML/XML
     "SecretsOPerationS.SOPS",    # sops — encrypted secrets files (age / Azure Key Vault / KMS)
+    "AgileBits.1Password.CLI",   # op — 1Password CLI; also the one WSL calls (op.exe) for desktop-app unlock
     "dandavison.delta",          # git-delta — wired into git by GitConfig.UseDelta
     "JesseDuffield.lazygit",     # lazygit
     "charmbracelet.glow",        # glow — rendered markdown in the terminal
@@ -1714,6 +1716,7 @@ if ($Config.InstallPowerShell7)     { Install-WingetPackage -Id "Microsoft.Power
 if ($Config.InstallVSCode)          { Install-WingetPackage -Id "Microsoft.VisualStudioCode" }
 if ($Config.InstallRancherDesktop)  { Install-WingetPackage -Id "SUSE.RancherDesktop" }
 if ($Config.InstallPowerToys)       { Install-WingetPackage -Id "Microsoft.PowerToys" }
+if ($Config.Install1Password)       { Install-WingetPackage -Id "AgileBits.1Password" }
 if ($Config.Install7Zip)            { Install-WingetPackage -Id "7zip.7zip" }
 foreach ($tool in $Config.CliTools) { Install-WingetPackage -Id $tool }
 # After the CLI tools: Ensure-WindowsGitConfig wires delta into git, so delta has
