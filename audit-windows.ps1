@@ -30,8 +30,13 @@ $Config = @{
   CheckNativeApps  = $true   # apps installed outside winget by their own installer
   CheckVSCodeExts  = $true   # code --list-extensions vs $Config.VSCodeExtensions
   CheckNpmGlobals  = $true   # npm -g globals vs the ones setup installs
+  CheckDotnet      = $true   # .NET SDKs left behind: replaced feature bands/patches, out-of-support majors
   CheckConfigFiles = $true   # WezTerm, PowerShell profiles, .wslconfig, cache env vars, git
   CheckStartup     = $true   # devbox-managed startup (Dev Drive task, ssh-agent) + autostart inventory
+
+  # Microsoft's support calendar per .NET major, read by the .NET SDKs section
+  # (the same source `dotnet sdk check` uses). Unreachable → that check is skipped.
+  DotnetReleasesIndex = "https://builds.dotnet.microsoft.com/dotnet/release-metadata/releases-index.json"
 
   # Things installed on purpose that are not part of the dev environment: personal
   # software, Office, browsers, runtime redistributables. Listing them here stops
@@ -45,7 +50,8 @@ $Config = @{
     NpmGlobals = @()
     # Regex over winget ids, for families that would otherwise need a dozen
     # literal entries each. These ship as dependencies of other packages and are
-    # never something you would "adopt into setup".
+    # never something you would "adopt into setup" — bar the .NET SDKs, which the
+    # ".NET SDKs" section reports per version instead.
     Patterns   = @(
       '^Microsoft\.VCRedist\.',
       '^Microsoft\.VCLibs',
@@ -53,6 +59,7 @@ $Config = @{
       '^Microsoft\.WindowsAppRuntime',
       '^Microsoft\.DotNet\.(Desktop|ASPNET)?Runtime',
       '^Microsoft\.DotNet\.Native\.',
+      '^Microsoft\.DotNet\.SDK\.',
       '^Microsoft\.AppInstaller$',
       '^Microsoft\.WindowsApp$'
     )
@@ -483,6 +490,130 @@ if ($Config.CheckNpmGlobals) {
     }
     if ($missingNpm.Count -eq 0 -and $extraNpm.Count -eq 0) {
       Report-Ok "npm globals match setup."
+    }
+  }
+}
+
+# ---------- .NET SDKs ----------
+# Setup installs no .NET on Windows, but winget's Microsoft.DotNet.SDK.<major>
+# packages and Visual Studio do, and neither ever removes one: each new feature
+# band is its own MSI next to the old ones, and a major stays after it leaves
+# support. Each SDK also holds on to the runtime it brought, so the runtimes
+# pile up with them. This reports what a newer SDK of the same major replaces
+# and every out-of-support major. Removing is left to you, because a global.json
+# with the default rollForward (latestPatch) is locked to its feature band.
+if ($Config.CheckDotnet) {
+  Write-Section ".NET SDKs"
+  if (-not (Test-Command "dotnet")) {
+    Report-Ok "No .NET SDK installed (setup installs none)."
+  } else {
+    $driftBefore = $script:driftCount
+    # Previews (10.0.100-rc.1...) never match and are left alone.
+    $sdks = @(dotnet --list-sdks 2>$null | ForEach-Object {
+      if ($_ -match '^(\d+)\.(\d+)\.(\d+)\s') {
+        [pscustomobject]@{
+          Text    = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+          Version = [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+          Major   = [int]$Matches[1]
+          Channel = "$($Matches[1]).$($Matches[2])"
+          Band    = [math]::Floor([int]$Matches[3] / 100)
+        }
+      }
+    })
+
+    # Channel → end-of-support date, for the channels already past it.
+    $eol = @{}
+    $supportKnown = $false
+    try {
+      [Net.ServicePointManager]::SecurityProtocol =
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+      $index = Invoke-RestMethod -Uri $Config.DotnetReleasesIndex -TimeoutSec 20
+      foreach ($r in @($index.'releases-index')) {
+        $eolDate = [datetime]::MinValue
+        $pastDate = $r.'eol-date' -and
+          [datetime]::TryParseExact([string]$r.'eol-date', 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None, [ref]$eolDate) -and
+          $eolDate -le (Get-Date).Date
+        if ($r.'support-phase' -eq 'eol' -or $pastDate) { $eol[[string]$r.'channel-version'] = [string]$r.'eol-date' }
+      }
+      $supportKnown = $true
+    } catch {
+      Report-Warn "Could not read the .NET release index — skipping the support check ($($_.Exception.Message))."
+    }
+
+    # Visual Studio installs its SDK under its own uninstall entry, which winget
+    # cannot remove; the VS Installer has to.
+    $arpNames = @(Get-ItemProperty -Path @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+      ) -ErrorAction SilentlyContinue |
+      Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -like 'Microsoft .NET SDK *' } |
+      ForEach-Object { $_.DisplayName })
+    $removeHint = {
+      param($sdk)
+      if ($arpNames | Where-Object { $_ -like "Microsoft .NET SDK $($sdk.Text) *from Visual Studio*" }) {
+        "remove:  Visual Studio Installer > Modify > Individual components (Visual Studio owns this SDK)"
+      } else {
+        "remove:  winget uninstall --id Microsoft.DotNet.SDK.$($sdk.Major) --version $($sdk.Text)   (or Settings > Apps > Installed apps)"
+      }
+    }
+
+    foreach ($g in @($sdks | Group-Object Channel)) {
+      $channel = $g.Name
+      $inChannel = @($g.Group | Sort-Object Version)
+      if ($eol.ContainsKey($channel)) {
+        foreach ($s in $inChannel) {
+          Report-Drift ".NET SDK $($s.Text): .NET $channel is out of support (since $($eol[$channel]))" @(
+            (& $removeHint $s),
+            "keep:    only while a repo still has to run on net$channel — it gets no security fixes"
+          )
+        }
+        continue
+      }
+      $newest = $inChannel[-1]
+      foreach ($s in $inChannel | Where-Object { $_.Version -ne $newest.Version }) {
+        $why = if ($s.Band -lt $newest.Band) { "feature band $($s.Band)xx, replaced by $($newest.Text)" } else { "replaced by patch $($newest.Text)" }
+        Report-Drift ".NET SDK $($s.Text): $why" @(
+          (& $removeHint $s),
+          "keep:    only if a global.json pins $channel.$($s.Band)xx with rollForward latestPatch (the default) or disable"
+        )
+      }
+    }
+
+    # Runtimes of a supported major that a newer patch replaces mostly go away
+    # with the SDKs above, so they are listed, not counted. Out-of-support ones
+    # are drift: nothing patches them any more.
+    $runtimes = @(dotnet --list-runtimes 2>$null | ForEach-Object {
+      if ($_ -match '^(\S+) ((\d+)\.(\d+)\.\d+)\s') {
+        [pscustomobject]@{ Name = $Matches[1]; Text = $Matches[2]; Version = [version]$Matches[2]; Channel = "$($Matches[3]).$($Matches[4])" }
+      }
+    })
+    foreach ($g in @($runtimes | Group-Object Channel)) {
+      $channel = $g.Name
+      if ($eol.ContainsKey($channel)) {
+        $list = (@($g.Group | Sort-Object Name, Version | ForEach-Object { "$($_.Name) $($_.Text)" }) -join ', ')
+        Report-Drift ".NET $channel runtimes, out of support: $list" @(
+          "remove:  most leave with the .NET $channel SDKs above; the rest: winget list Microsoft.DotNet, or Settings > Apps > Installed apps",
+          "keep:    only while an app you run still needs net$channel"
+        )
+        continue
+      }
+      foreach ($fw in @($g.Group | Group-Object Name)) {
+        $sorted = @($fw.Group | Sort-Object Version)
+        if ($sorted.Count -gt 1) {
+          $old = ($sorted[0..($sorted.Count - 2)] | ForEach-Object { $_.Text }) -join ', '
+          Report-Info "$($fw.Name) $old next to $($sorted[-1].Text) — removed with the SDK that brought it"
+        }
+      }
+    }
+
+    if ($script:driftCount -eq $driftBefore) {
+      $kept = (@($sdks | ForEach-Object { $_.Text }) -join ', ')
+      if ($supportKnown) {
+        Report-Ok ".NET SDKs: newest of each major, all in support ($kept)."
+      } else {
+        Report-Ok ".NET SDKs: newest of each major ($kept); support not checked."
+      }
     }
   }
 }

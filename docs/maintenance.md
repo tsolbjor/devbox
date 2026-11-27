@@ -50,8 +50,8 @@ so they can't fall out of sync with what setup actually does.
 
 ```powershell
 # Windows: winget apps / VS Code extensions / npm globals not in (or missing
-# from) setup, plus managed-config drift (WezTerm, PowerShell profiles,
-# .wslconfig, cache env vars, Git)
+# from) setup, .NET SDKs left behind, plus managed-config drift (WezTerm,
+# PowerShell profiles, .wslconfig, cache env vars, Git)
 .\audit-windows.ps1
 ```
 
@@ -60,6 +60,17 @@ so they can't fall out of sync with what setup actually does.
 # Git, default shell, version pins, plus extra snap/pipx/npm/dotnet apps
 bash audit-ubuntu.sh              # add --apt-extras / --local-bin for noisier checks
 ```
+
+Setup installs no .NET on Windows, but winget's `Microsoft.DotNet.SDK.<major>`
+packages and Visual Studio do, and neither removes anything: each new feature
+band installs next to the old one, and a major stays after it leaves support.
+The audit's *.NET SDKs* section reports every SDK that a newer one of the same
+major replaces, and every SDK and runtime of an out-of-support major (according
+to Microsoft's release index, the source `dotnet sdk check` uses), each with its
+`winget uninstall --id Microsoft.DotNet.SDK.<major> --version <v>` line. Before
+removing an older band, check that no repo's `global.json` pins it with the
+default `rollForward: latestPatch`. On Ubuntu, `update-ubuntu.sh` already prunes
+replaced patches in `~/.dotnet`.
 
 Each finding prints a two-way reconcile hint: how to **fix** the drift (rerun
 setup, install/uninstall) and, for unexpected apps, how to **adopt** it into
